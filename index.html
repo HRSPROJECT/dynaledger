@@ -204,10 +204,11 @@
     <div class="card p-6 mb-5">
       <p class="eyebrow mb-1">Every-day transfers</p>
       <h3 class="text-2xl font-medium mb-2">Daily routes</h3>
-      <p class="text-sm muted mb-4">Move a fixed amount from one category to another <b>automatically, every day</b> — as many routes per category as you like. E.g. Cash Sale → ₹100/day to Back Drawer <b>and</b> ₹600/day to Insurance. Missed days are caught up on next open (limited by available balance). Every movement is written to the logs.</p>
-      <div class="grid md:grid-cols-4 gap-3">
+      <p class="text-sm muted mb-4">Move money from one category to another <b>automatically, every day</b> — as many routes per category as you like. Two kinds:<br>• <b>Fixed</b> — e.g. Cash Sale → ₹100/day to Back Drawer <b>and</b> ₹600/day to Insurance. If the source falls short, it goes <b>negative</b> (overdraft allowed).<br>• <b>Sweep remainder</b> — moves <b>whatever is left</b> (after the fixed routes) to another category, e.g. Standard Drawer, so the source ends the day at exactly <b>zero</b>. One sweep per category.<br>Missed days are caught up on next open. Every movement is written to the logs.</p>
+      <div class="grid md:grid-cols-5 gap-3">
         <div><label class="eyebrow">From category</label><select id="schedSource" class="inp mt-1"></select></div>
         <div><label class="eyebrow">To category</label><select id="schedTarget" class="inp mt-1"></select></div>
+        <div><label class="eyebrow">Kind</label><select id="schedKind" class="inp mt-1" onchange="document.getElementById('schedAmt').disabled=this.value==='sweep'"><option value="fixed">Fixed ₹/day</option><option value="sweep">Sweep remainder</option></select></div>
         <div><label class="eyebrow">₹ per day</label><input id="schedAmt" type="number" min="0" step="0.01" class="inp mt-1" placeholder="e.g. 100"></div>
         <div class="flex items-end"><button onclick="addSchedule()" class="btn-p w-full">Add route</button></div>
       </div>
@@ -351,6 +352,7 @@ function migrateAutoDates(){
   DB.schedules.forEach(s=>{
     if(s.updatedAt===undefined){ s.updatedAt=0; touched=true; }
     if(!s.lastRunDate){ s.lastRunDate=dayKey(Date.now()); touched=true; }
+    if(!s.kind){ s.kind='fixed'; touched=true; }
   });
   if(touched) save();
 }
@@ -386,7 +388,7 @@ function saveCategory(){
 }
 function clearCatForm(){ ['cId','cName','cOpen','cMin','cAuto','cNote'].forEach(i=>document.getElementById(i).value=i==='cId'?'':''); document.getElementById('cColor').value='#C15F3C'; document.getElementById('cNature').value='debit'; document.getElementById('cAutoOn').checked=false; document.getElementById('catModalTitle').innerText='New category'; }
 function editCategory(id){ const c=DB.categories.find(x=>x.id===id); if(!c)return; document.getElementById('cId').value=c.id; document.getElementById('cName').value=c.name; document.getElementById('cNature').value=c.nature; document.getElementById('cColor').value=c.color; document.getElementById('cOpen').value=c.openingBalance; document.getElementById('cMin').value=c.minBalance; document.getElementById('cAuto').value=c.autoDailyAmount; document.getElementById('cAutoOn').checked=c.autoEnabled; document.getElementById('cNote').value=c.note||''; document.getElementById('catModalTitle').innerText='Edit category'; openModal('catModal'); }
-function delCategory(id){ if(!confirm('Delete category + its relations? Transactions kept.'))return; DB.categories=DB.categories.filter(c=>c.id!==id); DB.relations=DB.relations.filter(r=>r.sourceId!==id&&r.targetId!==id); save(); render(); }
+function delCategory(id){ if(!confirm('Delete category + its relations and routes? Transactions kept.'))return; DB.categories=DB.categories.filter(c=>c.id!==id); DB.relations=DB.relations.filter(r=>r.sourceId!==id&&r.targetId!==id); DB.schedules=(DB.schedules||[]).filter(s=>s.sourceId!==id&&s.targetId!==id); save(); render(); }
 function catName(id){ return (DB.categories.find(c=>c.id===id)||{}).name||'—'; }
 
 /* ---- relations ---- */
@@ -465,37 +467,46 @@ function accrueOne(c, todayK, now, log){
 }
 function runAutoUpdate(manual){
   const now=Date.now(), todayK=dayKey(now);
-  let applied=0, daysTotal=0, routes=0, routedDays=0;
+  let applied=0, daysTotal=0, routes=0, routedDays=0, sweeps=0;
   DB.categories.forEach(c=>{
     if(!c.autoEnabled||!(+c.autoDailyAmount)) return;
     if(!c.lastAutoDate) c.lastAutoDate=c.lastAutoApplied?dayKey(c.lastAutoApplied):(c.createdAt?dayKey(c.createdAt):todayK);
     const d=accrueOne(c,todayK,now);
     if(d>0){ applied++; daysTotal+=d; }
   });
-  (DB.schedules||[]).forEach(s=>{
-    if(!s.active||!(+s.dailyAmount)) return;
+  // fixed routes first, sweeps last — so the remainder is computed after all deductions
+  const ordered=[...(DB.schedules||[])].sort((a,b)=>((a.kind==='sweep')?1:0)-((b.kind==='sweep')?1:0));
+  ordered.forEach(s=>{
     const src=DB.categories.find(c=>c.id===s.sourceId), tgt=DB.categories.find(c=>c.id===s.targetId);
-    if(!src||!tgt) return;
+    if(!src||!tgt||!s.active) return;
     if(!s.lastRunDate) s.lastRunDate=todayK; // routes start on creation day — never silent backfill
     const days=Math.max(0,daysBetween(s.lastRunDate,todayK));
     if(days<1) return;
-    const want=(+s.dailyAmount)*days;
-    const give=Math.min(want,Math.max(0,+src.balance||0));
     s.lastRunDate=todayK; s.updatedAt=now;
-    if(give>0){
-      src.balance=(+src.balance||0)-give; tgt.balance=(+tgt.balance||0)+give;
+    if(s.kind==='sweep'){
+      const rest=+src.balance||0;
+      if(rest===0) return; // already zero — nothing to log
+      src.balance=0; tgt.balance=(+tgt.balance||0)+rest;
       src.updatedAt=now; tgt.updatedAt=now;
-      const partial=give<want;
-      DB.transactions.push({id:uid(),ts:now,type:'auto',categoryId:src.id,amount:-give,note:`Daily route → ${tgt.name} (${fmt(s.dailyAmount)}/day × ${days}d${partial?' · partial, low balance':''})`,relatedCategoryId:tgt.id});
-      DB.transactions.push({id:uid(),ts:now,type:'auto',categoryId:tgt.id,amount:give,note:`Daily route ← ${src.name} (${fmt(s.dailyAmount)}/day × ${days}d${partial?' · partial':''})`,relatedCategoryId:src.id});
-      routes++; routedDays+=days;
+      DB.transactions.push({id:uid(),ts:now,type:'auto',categoryId:src.id,amount:-rest,note:`Sweep remainder → ${tgt.name} (${fmt(rest)} · day end, balance zeroed)`,relatedCategoryId:tgt.id});
+      DB.transactions.push({id:uid(),ts:now,type:'auto',categoryId:tgt.id,amount:rest,note:`Sweep remainder ← ${src.name} (${fmt(rest)})`,relatedCategoryId:src.id});
+      routes++; routedDays+=days; sweeps++;
+      return;
     }
+    if(!(+s.dailyAmount)) return;
+    const give=(+s.dailyAmount)*days; // overdraft allowed — source may go negative
+    if(give===0) return;
+    src.balance=(+src.balance||0)-give; tgt.balance=(+tgt.balance||0)+give;
+    src.updatedAt=now; tgt.updatedAt=now;
+    DB.transactions.push({id:uid(),ts:now,type:'auto',categoryId:src.id,amount:-give,note:`Daily route → ${tgt.name} (${fmt(s.dailyAmount)}/day × ${days}d)`,relatedCategoryId:tgt.id});
+    DB.transactions.push({id:uid(),ts:now,type:'auto',categoryId:tgt.id,amount:give,note:`Daily route ← ${src.name} (${fmt(s.dailyAmount)}/day × ${days}d)`,relatedCategoryId:src.id});
+    routes++; routedDays+=days;
   });
   save(); render();
   if(manual){
     const bits=[];
     if(applied) bits.push(`${applied} auto-growth categor${applied>1?'ies':'y'} caught up by ${daysTotal} day${daysTotal>1?'s':''}`);
-    if(routes) bits.push(`${routes} daily route${routes>1?'s':''} moved money for ${routedDays} day${routedDays>1?'s':''}`);
+    if(routes) bits.push(`${routes} route move${routes>1?'s':''} settled for ${routedDays} day${routedDays>1?'s':''}${sweeps?` (incl. ${sweeps} remainder sweep${sweeps>1?'s':''} → source zeroed)`:''}`);
     alert(bits.length?bits.join('\n'):'Everything is already up to date as of today.');
   }
 }
@@ -503,15 +514,22 @@ function runAutoUpdate(manual){
 /* ---- daily routes (scheduled transfers) ---- */
 function schedulesOf(catId){ return (DB.schedules||[]).filter(s=>s.active&&(s.sourceId===catId||s.targetId===catId)); }
 function pendingSchedDays(s){
-  if(!s.active||!(+s.dailyAmount)) return 0;
+  if(!s.active) return 0;
+  if(s.kind!=='sweep'&&!(+s.dailyAmount)) return 0;
   return Math.max(0,daysBetween(s.lastRunDate||dayKey(Date.now()),dayKey(Date.now())));
 }
 function addSchedule(){
-  const src=document.getElementById('schedSource').value, tgt=document.getElementById('schedTarget').value, amt=+document.getElementById('schedAmt').value;
+  const src=document.getElementById('schedSource').value, tgt=document.getElementById('schedTarget').value;
+  const kind=document.getElementById('schedKind').value||'fixed', amt=+document.getElementById('schedAmt').value;
   if(!src||!tgt) return alert('Pick the from and to categories.');
   if(src===tgt) return alert('From and to must be different categories.');
-  if(!(amt>0)) return alert('Enter an amount greater than 0 per day.');
-  DB.schedules.push({id:uid(),sourceId:src,targetId:tgt,dailyAmount:amt,active:true,lastRunDate:dayKey(Date.now()),updatedAt:Date.now()});
+  if(kind==='sweep'){
+    if((DB.schedules||[]).some(s=>s.active&&s.kind==='sweep'&&s.sourceId===src)) return alert('This category already sweeps its remainder somewhere — one sweep per category.');
+    DB.schedules.push({id:uid(),sourceId:src,targetId:tgt,kind:'sweep',dailyAmount:0,active:true,lastRunDate:dayKey(Date.now()),updatedAt:Date.now()});
+  } else {
+    if(!(amt>0)) return alert('Enter an amount greater than 0 per day.');
+    DB.schedules.push({id:uid(),sourceId:src,targetId:tgt,kind:'fixed',dailyAmount:amt,active:true,lastRunDate:dayKey(Date.now()),updatedAt:Date.now()});
+  }
   document.getElementById('schedAmt').value='';
   save(); render();
 }
@@ -557,7 +575,9 @@ function render(){
       <p class="text-xs faint">floor ${fmt(c.minBalance)} ${below?'· below floor':''} &nbsp;·&nbsp; auto ${c.autoEnabled?(fmt(c.autoDailyAmount)+'/day'):'off'} &nbsp;·&nbsp; ${indep?'<span style="color:#5B7A5A">Independent</span>':`<span style="color:#9E4A2D">${links} link(s)</span>`}</p>
       ${links?'<div class="text-[12px] mt-3 pt-3 space-y-1 muted" style="border-top:1px solid var(--line-soft)">'
         +rels.map(r=>`<div>— ${r.sourceId===c.id?`to ${esc(catName(r.targetId))} · <b>${r.mode==='percent'?r.value+'%':fmt(r.value)}</b> ${r.deductFromSource?'(moved)':'(mirrored)'}`:`from ${esc(catName(r.sourceId))}`}</div>`).join('')
-        +schs.map(s=>`<div>◷ ${s.sourceId===c.id?`${fmt(s.dailyAmount)}/day → ${esc(catName(s.targetId))}`:`${fmt(s.dailyAmount)}/day ← ${esc(catName(s.sourceId))}`} <span class="faint">(daily)</span></div>`).join('')+'</div>':''}
+        +schs.map(s=>s.kind==='sweep'
+          ?`<div>◷ ${s.sourceId===c.id?`sweeps remainder → ${esc(catName(s.targetId))}`:`sweeps remainder ← ${esc(catName(s.sourceId))}`} <span class="faint">(daily, ends at zero)</span></div>`
+          :`<div>◷ ${s.sourceId===c.id?`${fmt(s.dailyAmount)}/day → ${esc(catName(s.targetId))}`:`${fmt(s.dailyAmount)}/day ← ${esc(catName(s.sourceId))}`} <span class="faint">(daily)</span></div>`).join('')+'</div>':''}
       ${c.note?`<p class="text-xs faint mt-2 italic">${esc(c.note)}</p>`:''}
       <div class="flex gap-2 mt-4 pt-4 flex-wrap" style="border-top:1px solid var(--line-soft)"><button onclick="quickTxn('${c.id}','credit')" class="btn-p !py-1.5 !px-3 text-sm">+ Add</button><button onclick="quickTxn('${c.id}','debit')" class="btn-g !py-1.5 !px-3 text-sm">− Out</button><button onclick="openCatLog('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm">Log</button><button onclick="editCategory('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm">Edit</button><button onclick="delCategory('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm" style="color:#9E4A2D">Delete</button></div>
     </div>`;}).join('')||'<p class="faint">No categories yet. Begin with + Category.</p>';
@@ -582,10 +602,13 @@ function render(){
   const sl=document.getElementById('schedList');
   if(sl) sl.innerHTML=(DB.schedules||[]).map(s=>{
     const pd=pendingSchedDays(s);
-    const due=pd>0?` · <b style="color:#9E4A2D">${pd} day${pd>1?'s':''} due (${fmt((+s.dailyAmount)*pd)})</b>`:' · up to date';
+    const srcC=DB.categories.find(c=>c.id===s.sourceId);
+    const due=s.kind==='sweep'
+      ? ` · remainder now <b>${fmt(srcC?+srcC.balance||0:0)}</b>`
+      : (pd>0?` · <b style="color:#9E4A2D">${pd} day${pd>1?'s':''} due (${fmt((+s.dailyAmount)*pd)})</b>`:' · up to date');
     return `<div class="flex flex-wrap gap-2 items-center text-sm soft-row rounded-lg p-3 ${s.active?'':'opacity-50'}">
     <b class="font-medium">${esc(catName(s.sourceId))}</b><span class="faint">→</span><b class="font-medium">${esc(catName(s.targetId))}</b>
-    <span class="soft-row px-2 py-1 rounded" style="background:#fff">${fmt(s.dailyAmount)}/day</span>
+    <span class="soft-row px-2 py-1 rounded" style="background:#fff">${s.kind==='sweep'?'sweep remainder':fmt(s.dailyAmount)+'/day'}</span>
     <span class="text-[11px] faint">since ${s.lastRunDate||'—'}${s.active?due:''}</span>
     <span class="ml-auto flex gap-2"><button onclick="toggleSchedule('${s.id}')" class="btn-g !py-1 !px-3 text-xs">${s.active?'Pause':'Resume'}</button><button onclick="delSchedule('${s.id}')" class="btn-g !py-1 !px-3 text-xs" style="color:#9E4A2D">Delete</button></span></div>`;}).join('')||'<p class="faint text-sm">No daily routes yet — add your first one above.</p>';
 
