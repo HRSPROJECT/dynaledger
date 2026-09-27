@@ -150,8 +150,7 @@
   <section id="view-relations" class="hidden">
     <div class="card p-6 mb-5 text-sm muted">
       <p class="eyebrow mb-2">How relations work</p>
-      <p class="text-[15px]">When money is <b>added (credited)</b> to a <b>source</b> category, each active rule quietly routes a share to a <b>target</b>.
-      Choose <b>percent</b> or a <b>fixed amount</b>.
+      <p class="text-[15px]">The moment money is <b>added (credited)</b> to a <b>source</b> category, each active rule instantly routes its share to a <b>target</b> — no waiting, no daily batch.<br>• <b>Percent / fixed</b> — e.g. Cash Sale → ₹100 to Back Drawer <b>and</b> ₹600 to Insurance on every add.<br>• <b>Sweep remainder</b> — after the other rules, whatever is left goes to another category (e.g. Standard Drawer), leaving the source at exactly <b>zero</b>. One sweep per source.<br>
       <b>Deduct on</b> moves money (the source keeps the remainder).
       <b>Deduct off</b> mirrors it (the source keeps everything, the target receives a copy).
       A category with no active rules is <b>independent</b>.</p>
@@ -200,19 +199,6 @@
       <p class="text-sm muted mb-4">Optional. For example, Savings +₹50 a day, Petty-cash −₹20 a day. Applied automatically from the days elapsed since the last run — on open, and every minute after.</p>
       <div id="autoList" class="space-y-3"></div>
       <button onclick="runAutoUpdate(true)" class="btn-p mt-4">Run daily jobs now</button>
-    </div>
-    <div class="card p-6 mb-5">
-      <p class="eyebrow mb-1">Every-day transfers</p>
-      <h3 class="text-2xl font-medium mb-2">Daily routes</h3>
-      <p class="text-sm muted mb-4">Move money from one category to another <b>automatically, every day</b> — as many routes per category as you like. Two kinds:<br>• <b>Fixed</b> — e.g. Cash Sale → ₹100/day to Back Drawer <b>and</b> ₹600/day to Insurance. If the source falls short, it goes <b>negative</b> (overdraft allowed).<br>• <b>Sweep remainder</b> — moves <b>whatever is left</b> (after the fixed routes) to another category, e.g. Standard Drawer, so the source ends the day at exactly <b>zero</b>. One sweep per category.<br>Missed days are caught up on next open. Every movement is written to the logs.</p>
-      <div class="grid md:grid-cols-5 gap-3">
-        <div><label class="eyebrow">From category</label><select id="schedSource" class="inp mt-1"></select></div>
-        <div><label class="eyebrow">To category</label><select id="schedTarget" class="inp mt-1"></select></div>
-        <div><label class="eyebrow">Kind</label><select id="schedKind" class="inp mt-1" onchange="document.getElementById('schedAmt').disabled=this.value==='sweep'"><option value="fixed">Fixed ₹/day</option><option value="sweep">Sweep remainder</option></select></div>
-        <div><label class="eyebrow">₹ per day</label><input id="schedAmt" type="number" min="0" step="0.01" class="inp mt-1" placeholder="e.g. 100"></div>
-        <div class="flex items-end"><button onclick="addSchedule()" class="btn-p w-full">Add route</button></div>
-      </div>
-      <div id="schedList" class="space-y-3 mt-4"></div>
     </div>
     <div class="card p-6 mb-5" id="syncCard">
       <p class="eyebrow mb-1">Devices</p>
@@ -305,9 +291,10 @@
     <label class="eyebrow">When money is added to (source)</label><select id="rSource" class="inp mb-3 mt-1"></select>
     <label class="eyebrow">Quietly route to (target)</label><select id="rTarget" class="inp mb-3 mt-1"></select>
     <div class="grid grid-cols-2 gap-3 mb-3">
-      <div><label class="eyebrow">Mode</label><select id="rMode" class="inp mt-1"><option value="percent">Percent %</option><option value="fixed">Fixed ₹</option></select></div>
+      <div><label class="eyebrow">Mode</label><select id="rMode" class="inp mt-1" onchange="document.getElementById('rValue').disabled=this.value==='sweep';document.getElementById('rDeduct').disabled=this.value==='sweep'"><option value="percent">Percent %</option><option value="fixed">Fixed ₹</option><option value="sweep">Sweep remainder</option></select></div>
       <div><label class="eyebrow">Value</label><input id="rValue" type="number" value="10" class="inp mt-1"></div>
     </div>
+    <p class="text-xs faint mb-3">Sweep remainder ignores value: it moves everything left after the other rules, ending the source at zero. Always a move (deduct setting ignored).</p>
     <div class="flex items-center gap-2 mb-4"><input id="rDeduct" type="checkbox" checked class="w-4 h-4 accent-[#C15F3C]"><label class="text-xs muted">Deduct from source (on = move, off = mirror)</label></div>
     <div class="flex gap-2 justify-end"><button onclick="closeModal('relModal')" class="btn-g">Cancel</button><button onclick="saveRelation()" class="btn-p">Save rule</button></div>
   </div>
@@ -315,14 +302,14 @@
 
 <script>
 const LS='dynaLedgerV1';
-let DB={categories:[],relations:[],schedules:[],transactions:[],currency:'₹'};
+let DB={categories:[],relations:[],transactions:[],currency:'₹'};
 let charts={};
 const uid=()=>Math.random().toString(36).slice(2,9);
 const fmt=n=>(DB.currency||'₹')+Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:2});
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 /* ---- persistence ---- */
-function load(){ try{const r=localStorage.getItem(LS); if(r) DB={currency:'₹',categories:[],relations:[],schedules:[],transactions:[],...JSON.parse(r)};}catch(e){} }
+function load(){ try{const r=localStorage.getItem(LS); if(r) DB={currency:'₹',categories:[],relations:[],transactions:[],...JSON.parse(r)};}catch(e){} }
 function save(){ DB.savedAt=Date.now(); localStorage.setItem(LS,JSON.stringify(DB)); }
 
 /* ---- calendar-day helpers (auto-update accuracy) ---- */
@@ -348,18 +335,13 @@ function migrateAutoDates(){
     if(c.updatedAt===undefined){ c.updatedAt=c.createdAt||0; touched=true; }
   });
   DB.relations.forEach(r=>{ if(r.updatedAt===undefined){ r.updatedAt=0; touched=true; } });
-  if(!Array.isArray(DB.schedules)){ DB.schedules=[]; touched=true; }
-  DB.schedules.forEach(s=>{
-    if(s.updatedAt===undefined){ s.updatedAt=0; touched=true; }
-    if(!s.lastRunDate){ s.lastRunDate=dayKey(Date.now()); touched=true; }
-    if(!s.kind){ s.kind='fixed'; touched=true; }
-  });
+  if('schedules' in DB){ delete DB.schedules; touched=true; } // daily-cut system removed — instant routing on add replaces it; past movements stay in the logs
   if(touched) save();
 }
 
 /* ---- tabs/modals ---- */
 function switchTab(t){ ['dashboard','categories','relations','ledger','settings'].forEach(x=>{document.getElementById('view-'+x).classList.add('hidden');document.getElementById('tab-'+x).classList.remove('tab-active'); const m=document.getElementById('m-'+x); if(m)m.classList.remove('mactive');}); document.getElementById('view-'+t).classList.remove('hidden'); document.getElementById('tab-'+t).classList.add('tab-active'); const mt=document.getElementById('m-'+t); if(mt)mt.classList.add('mactive'); if(t==='ledger')renderLedger(); render(); window.scrollTo({top:0,behavior:'smooth'}); }
-function openModal(id){ document.getElementById(id).classList.remove('hidden'); refreshSelects(); if(id==='txnModal')previewRelations(); }
+function openModal(id){ document.getElementById(id).classList.remove('hidden'); refreshSelects(); if(id==='txnModal')previewRelations(); if(id==='relModal'&&!document.getElementById('rId').value){ document.getElementById('rValue').disabled=false; document.getElementById('rDeduct').disabled=false; } }
 function closeModal(id){ document.getElementById(id).classList.add('hidden'); }
 
 /* ---- categories ---- */
@@ -388,7 +370,7 @@ function saveCategory(){
 }
 function clearCatForm(){ ['cId','cName','cOpen','cMin','cAuto','cNote'].forEach(i=>document.getElementById(i).value=i==='cId'?'':''); document.getElementById('cColor').value='#C15F3C'; document.getElementById('cNature').value='debit'; document.getElementById('cAutoOn').checked=false; document.getElementById('catModalTitle').innerText='New category'; }
 function editCategory(id){ const c=DB.categories.find(x=>x.id===id); if(!c)return; document.getElementById('cId').value=c.id; document.getElementById('cName').value=c.name; document.getElementById('cNature').value=c.nature; document.getElementById('cColor').value=c.color; document.getElementById('cOpen').value=c.openingBalance; document.getElementById('cMin').value=c.minBalance; document.getElementById('cAuto').value=c.autoDailyAmount; document.getElementById('cAutoOn').checked=c.autoEnabled; document.getElementById('cNote').value=c.note||''; document.getElementById('catModalTitle').innerText='Edit category'; openModal('catModal'); }
-function delCategory(id){ if(!confirm('Delete category + its relations and routes? Transactions kept.'))return; DB.categories=DB.categories.filter(c=>c.id!==id); DB.relations=DB.relations.filter(r=>r.sourceId!==id&&r.targetId!==id); DB.schedules=(DB.schedules||[]).filter(s=>s.sourceId!==id&&s.targetId!==id); save(); render(); }
+function delCategory(id){ if(!confirm('Delete category + its relations? Transactions kept.'))return; DB.categories=DB.categories.filter(c=>c.id!==id); DB.relations=DB.relations.filter(r=>r.sourceId!==id&&r.targetId!==id); save(); render(); }
 function catName(id){ return (DB.categories.find(c=>c.id===id)||{}).name||'—'; }
 
 /* ---- relations ---- */
@@ -396,11 +378,13 @@ function saveRelation(){
   const s=document.getElementById('rSource').value, t=document.getElementById('rTarget').value;
   if(!s||!t) return alert('Pick source + target'); if(s===t) return alert('Source and target must differ');
   const id=document.getElementById('rId').value||uid();
-  const data={id,sourceId:s,targetId:t,mode:document.getElementById('rMode').value,value:+document.getElementById('rValue').value||0,deductFromSource:document.getElementById('rDeduct').checked,active:true,updatedAt:Date.now()};
+  const mode=document.getElementById('rMode').value;
+  if(mode==='sweep'&&(DB.relations||[]).some(r=>r.id!==id&&r.active&&r.mode==='sweep'&&r.sourceId===s)) return alert('This source already sweeps its remainder somewhere — one sweep per category.');
+  const data={id,sourceId:s,targetId:t,mode,value:mode==='sweep'?0:(+document.getElementById('rValue').value||0),deductFromSource:mode==='sweep'?true:document.getElementById('rDeduct').checked,active:true,updatedAt:Date.now()};
   const ex=DB.relations.find(r=>r.id===id); if(ex)Object.assign(ex,data); else DB.relations.push(data);
   document.getElementById('rId').value=''; save(); closeModal('relModal'); render();
 }
-function editRelation(id){ const r=DB.relations.find(x=>x.id===id); if(!r)return; document.getElementById('rId').value=r.id; refreshSelects(); document.getElementById('rSource').value=r.sourceId; document.getElementById('rTarget').value=r.targetId; document.getElementById('rMode').value=r.mode; document.getElementById('rValue').value=r.value; document.getElementById('rDeduct').checked=r.deductFromSource; openModal('relModal'); }
+function editRelation(id){ const r=DB.relations.find(x=>x.id===id); if(!r)return; document.getElementById('rId').value=r.id; refreshSelects(); document.getElementById('rSource').value=r.sourceId; document.getElementById('rTarget').value=r.targetId; document.getElementById('rMode').value=r.mode||'percent'; document.getElementById('rValue').value=r.value; document.getElementById('rValue').disabled=(r.mode==='sweep'); document.getElementById('rDeduct').checked=r.mode==='sweep'?true:!!r.deductFromSource; document.getElementById('rDeduct').disabled=(r.mode==='sweep'); openModal('relModal'); }
 function toggleRelation(id){ const r=DB.relations.find(x=>x.id===id); r.active=!r.active; r.updatedAt=Date.now(); save(); render(); }
 function delRelation(id){ if(!confirm('Delete rule?'))return; DB.relations=DB.relations.filter(r=>r.id!==id); save(); render(); }
 function relationsOf(catId){ return DB.relations.filter(r=>r.active&&(r.sourceId===catId||r.targetId===catId)); }
@@ -414,17 +398,29 @@ function saveTransaction(){
   if(dir==='credit'){
     cat.balance+=amt;
     DB.transactions.push({id:uid(),ts:Date.now(),type:'credit',categoryId:catId,amount:amt,note});
-    // fire relations
+    // fire relations instantly: percent/fixed/mirror first, sweep-remainder last
     const rules=DB.relations.filter(r=>r.active&&r.sourceId===catId);
     let totalDeduct=0;
-    rules.forEach(r=>{
+    rules.filter(r=>r.mode!=='sweep').forEach(r=>{
       const tgt=DB.categories.find(c=>c.id===r.targetId); if(!tgt)return;
       let share=r.mode==='percent'?amt*r.value/100:r.value; share=Math.max(0,share);
       if(r.deductFromSource){ share=Math.min(share,cat.balance); cat.balance-=share; totalDeduct+=share; }
       tgt.balance+=share;
       DB.transactions.push({id:uid(),ts:Date.now(),type:'relation',categoryId:tgt.id,amount:share,note:`Auto from ${cat.name} (${r.mode==='percent'?r.value+'%':'fixed '+fmt(r.value)})${r.deductFromSource?' · moved':' · mirrored'}`,relatedCategoryId:catId});
     });
-    if(totalDeduct>0) DB.transactions.push({id:uid(),ts:Date.now(),type:'transfer',categoryId:catId,amount:-totalDeduct,note:`Auto-routed to ${rules.filter(r=>r.deductFromSource).length} categorie(s)`});
+    if(totalDeduct>0) DB.transactions.push({id:uid(),ts:Date.now(),type:'transfer',categoryId:catId,amount:-totalDeduct,note:`Auto-routed to ${rules.filter(r=>r.mode!=='sweep'&&r.deductFromSource).length} categorie(s)`});
+    const sweep=rules.find(r=>r.mode==='sweep');
+    if(sweep){
+      const tgt=DB.categories.find(c=>c.id===sweep.targetId);
+      if(tgt){
+        const rest=+cat.balance||0;
+        if(rest!==0){
+          cat.balance=0; tgt.balance=(+tgt.balance||0)+rest;
+          DB.transactions.push({id:uid(),ts:Date.now(),type:'relation',categoryId:tgt.id,amount:rest,note:`Sweep remainder from ${cat.name} (on +${fmt(amt)}, rest ${fmt(rest)} · source zeroed)`,relatedCategoryId:catId});
+          DB.transactions.push({id:uid(),ts:Date.now(),type:'transfer',categoryId:catId,amount:-rest,note:`Sweep remainder → ${tgt.name} (source zeroed)`});
+        }
+      }
+    }
   } else {
     cat.balance-=amt;
     DB.transactions.push({id:uid(),ts:Date.now(),type:'debit',categoryId:catId,amount:-amt,note});
@@ -448,7 +444,9 @@ function previewRelations(){
   const rules=DB.relations.filter(r=>r.active&&r.sourceId===catId);
   if(dir!=='credit'||!rules.length||!(amt>0)){box.classList.add('hidden');return;}
   box.classList.remove('hidden');
-  box.innerHTML='<b>Will auto-route:</b><br>'+rules.map(r=>{const s=r.mode==='percent'?(amt*r.value/100):r.value;return `→ ${esc(catName(r.targetId))}: <b>${fmt(s)}</b> ${r.deductFromSource?'(moved out of source)':'(mirrored copy)'}`;}).join('<br>');
+  box.innerHTML='<b>Will instantly route:</b><br>'+rules.map(r=>{
+    if(r.mode==='sweep') return `→ ${esc(catName(r.targetId))}: <b>rest</b> (everything left · source zeroed)`;
+    const s=r.mode==='percent'?(amt*r.value/100):r.value;return `→ ${esc(catName(r.targetId))}: <b>${fmt(s)}</b> ${r.deductFromSource?'(moved out of source)':'(mirrored copy)'}`;}).join('<br>');
 }
 ['tCat','tDir','tAmt'].forEach(id=>document.addEventListener('input',e=>{if(e.target&&e.target.id===id)previewRelations();}));
 
@@ -467,76 +465,16 @@ function accrueOne(c, todayK, now, log){
 }
 function runAutoUpdate(manual){
   const now=Date.now(), todayK=dayKey(now);
-  let applied=0, daysTotal=0, routes=0, routedDays=0, sweeps=0;
+  let applied=0, daysTotal=0;
   DB.categories.forEach(c=>{
     if(!c.autoEnabled||!(+c.autoDailyAmount)) return;
     if(!c.lastAutoDate) c.lastAutoDate=c.lastAutoApplied?dayKey(c.lastAutoApplied):(c.createdAt?dayKey(c.createdAt):todayK);
     const d=accrueOne(c,todayK,now);
     if(d>0){ applied++; daysTotal+=d; }
   });
-  // fixed routes first, sweeps last — so the remainder is computed after all deductions
-  const ordered=[...(DB.schedules||[])].sort((a,b)=>((a.kind==='sweep')?1:0)-((b.kind==='sweep')?1:0));
-  ordered.forEach(s=>{
-    const src=DB.categories.find(c=>c.id===s.sourceId), tgt=DB.categories.find(c=>c.id===s.targetId);
-    if(!src||!tgt||!s.active) return;
-    if(!s.lastRunDate) s.lastRunDate=todayK; // routes start on creation day — never silent backfill
-    const days=Math.max(0,daysBetween(s.lastRunDate,todayK));
-    if(days<1) return;
-    s.lastRunDate=todayK; s.updatedAt=now;
-    if(s.kind==='sweep'){
-      const rest=+src.balance||0;
-      if(rest===0) return; // already zero — nothing to log
-      src.balance=0; tgt.balance=(+tgt.balance||0)+rest;
-      src.updatedAt=now; tgt.updatedAt=now;
-      DB.transactions.push({id:uid(),ts:now,type:'auto',categoryId:src.id,amount:-rest,note:`Sweep remainder → ${tgt.name} (${fmt(rest)} · day end, balance zeroed)`,relatedCategoryId:tgt.id});
-      DB.transactions.push({id:uid(),ts:now,type:'auto',categoryId:tgt.id,amount:rest,note:`Sweep remainder ← ${src.name} (${fmt(rest)})`,relatedCategoryId:src.id});
-      routes++; routedDays+=days; sweeps++;
-      return;
-    }
-    if(!(+s.dailyAmount)) return;
-    const give=(+s.dailyAmount)*days; // overdraft allowed — source may go negative
-    if(give===0) return;
-    src.balance=(+src.balance||0)-give; tgt.balance=(+tgt.balance||0)+give;
-    src.updatedAt=now; tgt.updatedAt=now;
-    DB.transactions.push({id:uid(),ts:now,type:'auto',categoryId:src.id,amount:-give,note:`Daily route → ${tgt.name} (${fmt(s.dailyAmount)}/day × ${days}d)`,relatedCategoryId:tgt.id});
-    DB.transactions.push({id:uid(),ts:now,type:'auto',categoryId:tgt.id,amount:give,note:`Daily route ← ${src.name} (${fmt(s.dailyAmount)}/day × ${days}d)`,relatedCategoryId:src.id});
-    routes++; routedDays+=days;
-  });
   save(); render();
-  if(manual){
-    const bits=[];
-    if(applied) bits.push(`${applied} auto-growth categor${applied>1?'ies':'y'} caught up by ${daysTotal} day${daysTotal>1?'s':''}`);
-    if(routes) bits.push(`${routes} route move${routes>1?'s':''} settled for ${routedDays} day${routedDays>1?'s':''}${sweeps?` (incl. ${sweeps} remainder sweep${sweeps>1?'s':''} → source zeroed)`:''}`);
-    alert(bits.length?bits.join('\n'):'Everything is already up to date as of today.');
-  }
+  if(manual) alert(applied?`Auto-update applied: ${applied} categor${applied>1?'ies':'y'} caught up by ${daysTotal} day${daysTotal>1?'s':''} in total.`:'Everything is already up to date as of today.');
 }
-
-/* ---- daily routes (scheduled transfers) ---- */
-function schedulesOf(catId){ return (DB.schedules||[]).filter(s=>s.active&&(s.sourceId===catId||s.targetId===catId)); }
-function pendingSchedDays(s){
-  if(!s.active) return 0;
-  if(s.kind!=='sweep'&&!(+s.dailyAmount)) return 0;
-  return Math.max(0,daysBetween(s.lastRunDate||dayKey(Date.now()),dayKey(Date.now())));
-}
-function addSchedule(){
-  const src=document.getElementById('schedSource').value, tgt=document.getElementById('schedTarget').value;
-  const kind=document.getElementById('schedKind').value||'fixed', amt=+document.getElementById('schedAmt').value;
-  if(!src||!tgt) return alert('Pick the from and to categories.');
-  if(src===tgt) return alert('From and to must be different categories.');
-  if(kind==='sweep'){
-    if((DB.schedules||[]).some(s=>s.active&&s.kind==='sweep'&&s.sourceId===src)) return alert('This category already sweeps its remainder somewhere — one sweep per category.');
-    DB.schedules.push({id:uid(),sourceId:src,targetId:tgt,kind:'sweep',dailyAmount:0,active:true,lastRunDate:dayKey(Date.now()),updatedAt:Date.now()});
-  } else {
-    if(!(amt>0)) return alert('Enter an amount greater than 0 per day.');
-    DB.schedules.push({id:uid(),sourceId:src,targetId:tgt,kind:'fixed',dailyAmount:amt,active:true,lastRunDate:dayKey(Date.now()),updatedAt:Date.now()});
-  }
-  document.getElementById('schedAmt').value='';
-  save(); render();
-}
-function toggleSchedule(id){ const s=DB.schedules.find(x=>x.id===id); if(!s)return; s.active=!s.active; s.updatedAt=Date.now();
-  if(s.active) s.lastRunDate=dayKey(Date.now()); // resume fresh — no surprise catch-up
-  save(); render(); }
-function delSchedule(id){ if(!confirm('Delete this daily route? Past movements stay in the logs.'))return; DB.schedules=DB.schedules.filter(s=>s.id!==id); save(); render(); }
 
 /* ---- dashboard/render ---- */
 function totals(){
@@ -549,7 +487,7 @@ function render(){
   document.getElementById('kpiNet').innerText=fmt(DB.categories.reduce((s,x)=>s+(+x.balance||0),0));
   document.getElementById('kpiDebit').innerText=fmt(t.debit);
   document.getElementById('kpiCredit').innerText=fmt(t.credit);
-  document.getElementById('kpiCount').innerText=`${DB.categories.length} categories • ${DB.relations.filter(r=>r.active).length} add-rules • ${(DB.schedules||[]).filter(s=>s.active).length} daily routes`;
+  document.getElementById('kpiCount').innerText=`${DB.categories.length} categories • ${DB.relations.filter(r=>r.active).length} active rules`;
   const today=new Date().toDateString(); let inn=0,out=0;
   DB.transactions.forEach(x=>{ if(new Date(x.ts).toDateString()===today){ if(x.amount>0)inn+=x.amount; else out+=x.amount; }});
   document.getElementById('kpiIn').innerText='+'+fmt(inn).replace(DB.currency,'');
@@ -564,20 +502,17 @@ function render(){
   const grid=document.getElementById('catGrid');
   grid.innerHTML=DB.categories.filter(c=>(!q||c.name.toLowerCase().includes(q))&&(!f||c.nature===f)).map(c=>{
     const rels=relationsOf(c.id);
-    const schs=schedulesOf(c.id);
-    const links=rels.length+schs.length;
-    const indep=links===0;
+    const indep=rels.length===0;
     const below=(+c.balance||0)<(+c.minBalance||0);
     return `<div class="card p-6" style="border-top:3px solid ${c.color}">
       <div class="flex justify-between items-start gap-2"><h3 class="text-xl font-medium">${esc(c.name)}</h3>
       <span class="text-[11px] px-2 py-1 rounded-full ${c.nature==='debit'?'badge-d':'badge-c'}">${c.nature.toUpperCase()}</span></div>
       <p class="text-3xl font-semibold my-2">${fmt(c.balance)}</p>
-      <p class="text-xs faint">floor ${fmt(c.minBalance)} ${below?'· below floor':''} &nbsp;·&nbsp; auto ${c.autoEnabled?(fmt(c.autoDailyAmount)+'/day'):'off'} &nbsp;·&nbsp; ${indep?'<span style="color:#5B7A5A">Independent</span>':`<span style="color:#9E4A2D">${links} link(s)</span>`}</p>
-      ${links?'<div class="text-[12px] mt-3 pt-3 space-y-1 muted" style="border-top:1px solid var(--line-soft)">'
-        +rels.map(r=>`<div>— ${r.sourceId===c.id?`to ${esc(catName(r.targetId))} · <b>${r.mode==='percent'?r.value+'%':fmt(r.value)}</b> ${r.deductFromSource?'(moved)':'(mirrored)'}`:`from ${esc(catName(r.sourceId))}`}</div>`).join('')
-        +schs.map(s=>s.kind==='sweep'
-          ?`<div>◷ ${s.sourceId===c.id?`sweeps remainder → ${esc(catName(s.targetId))}`:`sweeps remainder ← ${esc(catName(s.sourceId))}`} <span class="faint">(daily, ends at zero)</span></div>`
-          :`<div>◷ ${s.sourceId===c.id?`${fmt(s.dailyAmount)}/day → ${esc(catName(s.targetId))}`:`${fmt(s.dailyAmount)}/day ← ${esc(catName(s.sourceId))}`} <span class="faint">(daily)</span></div>`).join('')+'</div>':''}
+      <p class="text-xs faint">floor ${fmt(c.minBalance)} ${below?'· below floor':''} &nbsp;·&nbsp; auto ${c.autoEnabled?(fmt(c.autoDailyAmount)+'/day'):'off'} &nbsp;·&nbsp; ${indep?'<span style="color:#5B7A5A">Independent</span>':`<span style="color:#9E4A2D">${rels.length} link(s)</span>`}</p>
+      ${rels.length?'<div class="text-[12px] mt-3 pt-3 space-y-1 muted" style="border-top:1px solid var(--line-soft)">'
+        +rels.map(r=>r.mode==='sweep'
+          ?`<div>— ${r.sourceId===c.id?`sweeps remainder → ${esc(catName(r.targetId))}`:`sweeps remainder ← ${esc(catName(r.sourceId))}`} <b>(source zeroed)</b></div>`
+          :`<div>— ${r.sourceId===c.id?`to ${esc(catName(r.targetId))} · <b>${r.mode==='percent'?r.value+'%':fmt(r.value)}</b> ${r.deductFromSource?'(moved)':'(mirrored)'}`:`from ${esc(catName(r.sourceId))}`}</div>`).join('')+'</div>':''}
       ${c.note?`<p class="text-xs faint mt-2 italic">${esc(c.note)}</p>`:''}
       <div class="flex gap-2 mt-4 pt-4 flex-wrap" style="border-top:1px solid var(--line-soft)"><button onclick="quickTxn('${c.id}','credit')" class="btn-p !py-1.5 !px-3 text-sm">+ Add</button><button onclick="quickTxn('${c.id}','debit')" class="btn-g !py-1.5 !px-3 text-sm">− Out</button><button onclick="openCatLog('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm">Log</button><button onclick="editCategory('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm">Edit</button><button onclick="delCategory('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm" style="color:#9E4A2D">Delete</button></div>
     </div>`;}).join('')||'<p class="faint">No categories yet. Begin with + Category.</p>';
@@ -585,9 +520,9 @@ function render(){
   // relations
   document.getElementById('relList').innerHTML=DB.relations.map(r=>`<div class="card p-5 flex flex-wrap items-center gap-3 text-sm ${r.active?'':'opacity-50'}">
     <span class="text-lg font-medium">${esc(catName(r.sourceId))}</span><span class="faint">→</span><span class="text-lg font-medium">${esc(catName(r.targetId))}</span>
-    <span class="soft-row px-2 py-1 rounded">${r.mode==='percent'?r.value+'%':fmt(r.value)}</span>
-    <span class="text-xs faint">${r.deductFromSource?'moved · deducts source':'mirrored · source kept whole'} · on each add</span>
-    <span class="ml-auto flex gap-2"><button onclick="toggleRelation('${r.id}')" class="btn-g !py-1 !px-3 text-xs">${r.active?'Pause':'Resume'}</button><button onclick="editRelation('${r.id}')" class="btn-g !py-1 !px-3 text-xs">Edit</button><button onclick="delRelation('${r.id}')" class="btn-g !py-1 !px-3 text-xs" style="color:#9E4A2D">Delete</button></span></div>`).join('')||'<p class="faint">No on-add rules — every category stands independent. (Time-based daily routes live under Settings.)</p>';
+    <span class="soft-row px-2 py-1 rounded">${r.mode==='sweep'?'rest':(r.mode==='percent'?r.value+'%':fmt(r.value))}</span>
+    <span class="text-xs faint">${r.mode==='sweep'?'sweep remainder · source zeroed':(r.deductFromSource?'moved · deducts source':'mirrored · source kept whole')} · on each add</span>
+    <span class="ml-auto flex gap-2"><button onclick="toggleRelation('${r.id}')" class="btn-g !py-1 !px-3 text-xs">${r.active?'Pause':'Resume'}</button><button onclick="editRelation('${r.id}')" class="btn-g !py-1 !px-3 text-xs">Edit</button><button onclick="delRelation('${r.id}')" class="btn-g !py-1 !px-3 text-xs" style="color:#9E4A2D">Delete</button></span></div>`).join('')||'<p class="faint">No rules — every category stands independent.</p>';
 
   // auto list
   document.getElementById('autoList').innerHTML=DB.categories.map(c=>{
@@ -597,20 +532,6 @@ function render(){
     <b class="w-40 font-medium">${esc(c.name)}</b><input type="number" value="${c.autoDailyAmount||0}" onchange="setAuto('${c.id}',this.value)" class="inp !w-32"><span class="text-xs faint">per day</span>
     <label class="text-xs muted flex gap-2 items-center"><input type="checkbox" ${c.autoEnabled?'checked':''} onchange="toggleAuto('${c.id}')" class="accent-[#C15F3C]"> enabled</label>
     <span class="text-[11px] faint ml-auto">since ${c.lastAutoDate||'—'}${c.autoEnabled?due:''}</span></div>`;}).join('');
-
-  // daily routes list
-  const sl=document.getElementById('schedList');
-  if(sl) sl.innerHTML=(DB.schedules||[]).map(s=>{
-    const pd=pendingSchedDays(s);
-    const srcC=DB.categories.find(c=>c.id===s.sourceId);
-    const due=s.kind==='sweep'
-      ? ` · remainder now <b>${fmt(srcC?+srcC.balance||0:0)}</b>`
-      : (pd>0?` · <b style="color:#9E4A2D">${pd} day${pd>1?'s':''} due (${fmt((+s.dailyAmount)*pd)})</b>`:' · up to date');
-    return `<div class="flex flex-wrap gap-2 items-center text-sm soft-row rounded-lg p-3 ${s.active?'':'opacity-50'}">
-    <b class="font-medium">${esc(catName(s.sourceId))}</b><span class="faint">→</span><b class="font-medium">${esc(catName(s.targetId))}</b>
-    <span class="soft-row px-2 py-1 rounded" style="background:#fff">${s.kind==='sweep'?'sweep remainder':fmt(s.dailyAmount)+'/day'}</span>
-    <span class="text-[11px] faint">since ${s.lastRunDate||'—'}${s.active?due:''}</span>
-    <span class="ml-auto flex gap-2"><button onclick="toggleSchedule('${s.id}')" class="btn-g !py-1 !px-3 text-xs">${s.active?'Pause':'Resume'}</button><button onclick="delSchedule('${s.id}')" class="btn-g !py-1 !px-3 text-xs" style="color:#9E4A2D">Delete</button></span></div>`;}).join('')||'<p class="faint text-sm">No daily routes yet — add your first one above.</p>';
 
   refreshSelects(); drawCharts();
 }
@@ -629,7 +550,7 @@ function toggleAuto(id){ const c=DB.categories.find(x=>x.id===id); if(!c)return;
 
 function refreshSelects(){
   const opts=DB.categories.map(c=>`<option value="${c.id}">${esc(c.name)} (${fmt(c.balance)})</option>`).join('');
-  ['tCat','xFrom','xTo','rSource','rTarget','ledCat','schedSource','schedTarget'].forEach(id=>{ const el=document.getElementById(id); if(!el)return; const v=el.value; el.innerHTML=(id==='ledCat'?'<option value="">All categories</option>':'')+opts; if(v)el.value=v; });
+  ['tCat','xFrom','xTo','rSource','rTarget','ledCat'].forEach(id=>{ const el=document.getElementById(id); if(!el)return; const v=el.value; el.innerHTML=(id==='ledCat'?'<option value="">All categories</option>':'')+opts; if(v)el.value=v; });
   const logEl=document.getElementById('logCat');
   if(logEl){ const v=logEl.value||(DB.categories[0]&&DB.categories[0].id); logEl.innerHTML=DB.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join(''); if(v)logEl.value=v; }
 }
@@ -730,7 +651,7 @@ function exportJSON(){ const b=new Blob([JSON.stringify(DB,null,2)],{type:'appli
 function importJSON(e){ const f=e.target.files[0]; if(!f)return; const r=new FileReader(); r.onload=()=>{ try{ const d=JSON.parse(r.result); if(!d||!Array.isArray(d.categories)||!Array.isArray(d.transactions)) throw 0; DB={currency:'₹',categories:[],relations:[],transactions:[],...d}; migrateAutoDates(); runAutoUpdate(false); save(); render(); alert('Imported!'); }catch(_){ alert('That file is not a valid DynaLedger backup.'); } }; r.readAsText(f); e.target.value=''; }
 function exportCSV(){ const q=v=>`"${String(v??'').replace(/"/g,'""')}"`; const rows=[['date','category','type','amount','note'],...[...DB.transactions].sort((a,b)=>b.ts-a.ts).map(t=>[new Date(t.ts).toISOString(),q(catName(t.categoryId)),t.type,t.amount,q(t.note||'')])]; const b=new Blob([rows.map(r=>r.join(',')).join('\n')],{type:'text/csv'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='dynaledger-ledger.csv'; a.click(); }
 function saveCurrency(){ DB.currency=document.getElementById('currencyInp').value||'₹'; save(); render(); }
-function wipeAll(){ if(!confirm('Delete ALL data?'))return; DB={categories:[],relations:[],schedules:[],transactions:[],currency:'₹'}; save(); render(); }
+function wipeAll(){ if(!confirm('Delete ALL data?'))return; DB={categories:[],relations:[],transactions:[],currency:'₹'}; save(); render(); }
 function seedDemo(){
   if(DB.categories.length&&!confirm('Add demo data on top?'))return;
   const mk=(name,nature,bal,min,auto,color)=>{const id=uid();const now=Date.now();DB.categories.push({id,name,nature,balance:bal,openingBalance:bal,minBalance:min,color:color||'#C15F3C',autoDailyAmount:auto||0,autoEnabled:!!auto,note:'',createdAt:now,lastAutoApplied:now,lastAutoDate:dayKey(now),updatedAt:now});DB.transactions.push({id:uid(),ts:now,type:'opening',categoryId:id,amount:bal,note:'Opening balance'});return id;};
@@ -836,17 +757,9 @@ function mergeIncoming(remote){
   });
   const tids=new Set(DB.transactions.map(t=>t.id));
   (remote.transactions||[]).forEach(rt=>{ if(!tids.has(rt.id)){ DB.transactions.push(rt); tids.add(rt.id); txns++; } });
-  if(!Array.isArray(DB.schedules)) DB.schedules=[];
-  const smap=new Map(DB.schedules.map(s=>[s.id,s]));
-  let routes=0;
-  (remote.schedules||[]).forEach(rs=>{
-    const local=smap.get(rs.id);
-    if(!local){ DB.schedules.push(rs); routes++; }
-    else if((rs.updatedAt||0)>=(local.updatedAt||0)){ Object.assign(local,rs); routes++; }
-  });
   if(remote.currency && !DB.currency) DB.currency=remote.currency;
   migrateAutoDates(); runAutoUpdate(false); save(); render();
-  return `${cats} categories, ${rels} rules, ${routes} routes, ${txns} entries merged`;
+  return `${cats} categories, ${rels} rules, ${txns} entries merged`;
 }
 function stopSync(silent){
   try{ syncConns.forEach(c=>c.close&&c.close()); }catch(e){}
