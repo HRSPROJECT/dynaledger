@@ -161,12 +161,35 @@
 
   <!-- LEDGER -->
   <section id="view-ledger" class="hidden">
-    <div class="card p-6 mb-5 flex flex-wrap gap-3">
-      <select id="ledCat" class="inp !w-56" onchange="renderLedger()"><option value="">All categories</option></select>
-      <select id="ledType" class="inp !w-48" onchange="renderLedger()"><option value="">All types</option><option>credit</option><option>debit</option><option>transfer</option><option>relation</option><option>auto</option><option>adjust</option><option>opening</option></select>
-      <button onclick="exportCSV()" class="btn-g">Export CSV</button>
+    <div class="flex gap-2 mb-5">
+      <button id="ledTabAll" onclick="ledTab('all')" class="btn-g tab-active">All entries</button>
+      <button id="ledTabCat" onclick="ledTab('cat')" class="btn-g">Category log</button>
     </div>
-    <div class="card p-6 overflow-auto"><table class="w-full text-sm"><thead><tr><th class="text-left p-3">Date</th><th class="text-left p-3">Category</th><th class="text-left p-3">Type</th><th class="text-right p-3">Amount</th><th class="text-left p-3">Note</th><th class="text-left p-3">Action</th></tr></thead><tbody id="ledBody"></tbody></table></div>
+    <div id="ledAllWrap">
+      <div class="card p-6 mb-5 flex flex-wrap gap-3">
+        <select id="ledCat" class="inp !w-56" onchange="renderLedger()"><option value="">All categories</option></select>
+        <select id="ledType" class="inp !w-48" onchange="renderLedger()"><option value="">All types</option><option>credit</option><option>debit</option><option>transfer</option><option>relation</option><option>auto</option><option>adjust</option><option>opening</option></select>
+        <button onclick="exportCSV()" class="btn-g">Export CSV</button>
+      </div>
+      <div class="card p-6 overflow-auto"><table class="w-full text-sm"><thead><tr><th class="text-left p-3">Date</th><th class="text-left p-3">Category</th><th class="text-left p-3">Type</th><th class="text-right p-3">Amount</th><th class="text-left p-3">Note</th><th class="text-left p-3">Action</th></tr></thead><tbody id="ledBody"></tbody></table></div>
+    </div>
+    <div id="ledCatWrap" class="hidden">
+      <div class="card p-6 mb-5">
+        <p class="eyebrow mb-2">Statement</p>
+        <div class="grid md:grid-cols-4 gap-3">
+          <div><label class="eyebrow">Category</label><select id="logCat" class="inp mt-1" onchange="renderCatLog()"></select></div>
+          <div><label class="eyebrow">From</label><input id="logFrom" type="date" class="inp mt-1" onchange="renderCatLog()"></div>
+          <div><label class="eyebrow">To</label><input id="logTo" type="date" class="inp mt-1" onchange="renderCatLog()"></div>
+          <div><label class="eyebrow">Entry type</label><select id="logType" class="inp mt-1" onchange="renderCatLog()"><option value="">All types</option><option>credit</option><option>debit</option><option>transfer</option><option>relation</option><option>auto</option><option>adjust</option><option>opening</option></select></div>
+        </div>
+        <div class="flex flex-wrap gap-2 mt-4 items-center">
+          <button onclick="exportCatCSV()" class="btn-g">Export this log (CSV)</button>
+          <button onclick="clearLogFilter()" class="btn-g">Clear dates</button>
+          <span id="logSummary" class="text-sm muted ml-auto"></span>
+        </div>
+      </div>
+      <div id="logBody" class="space-y-5"></div>
+    </div>
   </section>
 
   <!-- SETTINGS -->
@@ -471,7 +494,7 @@ function render(){
       <p class="text-xs faint">floor ${fmt(c.minBalance)} ${below?'· below floor':''} &nbsp;·&nbsp; auto ${c.autoEnabled?(fmt(c.autoDailyAmount)+'/day'):'off'} &nbsp;·&nbsp; ${indep?'<span style="color:#5B7A5A">Independent</span>':`<span style="color:#9E4A2D">${rels.length} link(s)</span>`}</p>
       ${rels.length?'<div class="text-[12px] mt-3 pt-3 space-y-1 muted" style="border-top:1px solid var(--line-soft)">'+rels.map(r=>`<div>— ${r.sourceId===c.id?`to ${esc(catName(r.targetId))} · <b>${r.mode==='percent'?r.value+'%':fmt(r.value)}</b> ${r.deductFromSource?'(moved)':'(mirrored)'}`:`from ${esc(catName(r.sourceId))}`}</div>`).join('')+'</div>':''}
       ${c.note?`<p class="text-xs faint mt-2 italic">${esc(c.note)}</p>`:''}
-      <div class="flex gap-2 mt-4 pt-4" style="border-top:1px solid var(--line-soft)"><button onclick="quickTxn('${c.id}','credit')" class="btn-p !py-1.5 !px-3 text-sm">+ Add</button><button onclick="quickTxn('${c.id}','debit')" class="btn-g !py-1.5 !px-3 text-sm">− Out</button><button onclick="editCategory('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm">Edit</button><button onclick="delCategory('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm" style="color:#9E4A2D">Delete</button></div>
+      <div class="flex gap-2 mt-4 pt-4 flex-wrap" style="border-top:1px solid var(--line-soft)"><button onclick="quickTxn('${c.id}','credit')" class="btn-p !py-1.5 !px-3 text-sm">+ Add</button><button onclick="quickTxn('${c.id}','debit')" class="btn-g !py-1.5 !px-3 text-sm">− Out</button><button onclick="openCatLog('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm">Log</button><button onclick="editCategory('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm">Edit</button><button onclick="delCategory('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm" style="color:#9E4A2D">Delete</button></div>
     </div>`;}).join('')||'<p class="faint">No categories yet. Begin with + Category.</p>';
 
   // relations
@@ -495,6 +518,7 @@ function render(){
 function txRow(t){ const col=t.amount>=0?'#3E5A3E':'#9E4A2D';
   return `<div class="flex justify-between gap-3 soft-row rounded-lg p-3"><div><b class="font-medium">${esc(catName(t.categoryId))}</b> <span class="text-[11px] px-2 py-0.5 rounded-full" style="border:1px solid var(--line);color:var(--ink-soft)">${t.type}</span><br><span class="text-xs faint">${new Date(t.ts).toLocaleString()} · ${esc(t.note||'')}</span></div><div class="text-right"><b style="color:${col}">${t.amount>=0?'+':''}${fmt(t.amount)}</b><br><button onclick="delTxn('${t.id}')" class="text-[11px] faint underline">reverse</button></div></div>`; }
 function quickTxn(id,dir){ refreshSelects(); document.getElementById('tCat').value=id; document.getElementById('tDir').value=dir; openModal('txnModal'); }
+function openCatLog(id){ switchTab('ledger'); ledTab('cat'); refreshSelects(); document.getElementById('logCat').value=id; document.getElementById('logFrom').value=''; document.getElementById('logTo').value=''; document.getElementById('logType').value=''; renderCatLog(); }
 function setAuto(id,v){ const c=DB.categories.find(x=>x.id===id); if(!c)return;
   // settle pending days at the OLD rate first, so history stays exact
   if(c.autoEnabled) accrueOne(c, dayKey(Date.now()), Date.now());
@@ -507,12 +531,88 @@ function toggleAuto(id){ const c=DB.categories.find(x=>x.id===id); if(!c)return;
 function refreshSelects(){
   const opts=DB.categories.map(c=>`<option value="${c.id}">${esc(c.name)} (${fmt(c.balance)})</option>`).join('');
   ['tCat','xFrom','xTo','rSource','rTarget','ledCat'].forEach(id=>{ const el=document.getElementById(id); if(!el)return; const v=el.value; el.innerHTML=(id==='ledCat'?'<option value="">All categories</option>':'')+opts; if(v)el.value=v; });
+  const logEl=document.getElementById('logCat');
+  if(logEl){ const v=logEl.value||(DB.categories[0]&&DB.categories[0].id); logEl.innerHTML=DB.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join(''); if(v)logEl.value=v; }
+}
+let ledMode='all';
+function ledTab(m){ ledMode=m;
+  document.getElementById('ledAllWrap').classList.toggle('hidden',m!=='all');
+  document.getElementById('ledCatWrap').classList.toggle('hidden',m!=='cat');
+  document.getElementById('ledTabAll').classList.toggle('tab-active',m==='all');
+  document.getElementById('ledTabCat').classList.toggle('tab-active',m==='cat');
+  if(m==='cat')renderCatLog(); else renderLedger();
+}
+function clearLogFilter(){ document.getElementById('logFrom').value=''; document.getElementById('logTo').value=''; document.getElementById('logType').value=''; renderCatLog(); }
+function prettyDay(ts){ return new Date(ts).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'}); }
+/* ---- category log: full date-wise history from opening balance, with running balance ---- */
+function logFiltered(cat){
+  const from=document.getElementById('logFrom').value, to=document.getElementById('logTo').value, ty=document.getElementById('logType').value;
+  const asc=[...DB.transactions].filter(t=>t.categoryId===cat.id).sort((a,b)=>a.ts-b.ts);
+  // the 'opening' entry carries the starting amount; only fall back to the
+  // stored opening balance when that entry is absent (old/manual data)
+  let run=asc.some(t=>t.type==='opening')?0:(+cat.openingBalance||0);
+  const withBal=asc.map(t=>{ run+=(+t.amount||0); return {...t,bal:run}; });
+  const shown=withBal.filter(t=>(!from||dayKey(t.ts)>=from)&&(!to||dayKey(t.ts)<=to)&&(!ty||t.type===ty));
+  const carry=shown.length?(shown[0].bal-(+shown[0].amount||0)):(+cat.balance||0);
+  const endBal=shown.length?shown[shown.length-1].bal:carry;
+  let pin=0,pout=0;
+  shown.forEach(t=>{ if(t.type==='opening')return; if((+t.amount||0)>=0)pin+=+t.amount; else pout+=+t.amount; });
+  return {shown,carry,endBal,pin,pout};
+}
+function renderCatLog(){
+  refreshSelects();
+  const body=document.getElementById('logBody'), sum=document.getElementById('logSummary');
+  const sel=document.getElementById('logCat');
+  const cat=DB.categories.find(c=>c.id===sel.value)||DB.categories[0];
+  if(!cat){ body.innerHTML='<div class="card p-6 faint">Create a category first — its full history will appear here.</div>'; sum.innerText=''; return; }
+  if(sel.value!==cat.id) sel.value=cat.id;
+  const {shown,carry,endBal,pin,pout}=logFiltered(cat);
+  sum.innerHTML=`Opening <b>${fmt(cat.openingBalance)}</b> · In <b style="color:#3E5A3E">+${fmt(pin).replace(DB.currency,'')}</b> · Out <b style="color:#9E4A2D">−${fmt(Math.abs(pout)).replace(DB.currency,'')}</b> · Period end <b>${fmt(endBal)}</b> · Today <b>${fmt(cat.balance)}</b>`;
+  let html=`<div class="card p-5 flex flex-wrap gap-3 items-center text-sm">
+    <span class="text-xl font-medium">${esc(cat.name)}</span>
+    <span class="text-[11px] px-2 py-1 rounded-full ${cat.nature==='debit'?'badge-d':'badge-c'}">${cat.nature.toUpperCase()}</span>
+    <span class="faint">carried in <b>${fmt(carry)}</b></span>
+    <span class="ml-auto faint">${shown.length} entr${shown.length===1?'y':'ies'} in view</span></div>`;
+  if(!shown.length){ body.innerHTML=html+'<div class="card p-6 faint">No entries match these filters. Carried balance: '+fmt(carry)+'.</div>'; return; }
+  const groups={};
+  shown.forEach(t=>{ const k=dayKey(t.ts); (groups[k]=groups[k]||[]).push(t); });
+  html+=Object.keys(groups).sort().reverse().map(k=>{
+    const rows=groups[k];
+    const net=rows.reduce((s,t)=>s+(+t.amount||0),0);
+    return `<div class="card p-5"><div class="flex flex-wrap gap-2 items-baseline mb-3">
+      <h4 class="text-lg font-medium">${prettyDay(rows[0].ts)}</h4>
+      <span class="text-xs faint ml-auto">day net <b style="color:${net>=0?'#3E5A3E':'#9E4A2D'}">${net>=0?'+':''}${fmt(net)}</b></span></div>
+      <div class="overflow-auto"><table class="w-full text-sm"><thead><tr>
+      <th class="text-left p-2">Time</th><th class="text-left p-2">Type</th><th class="text-left p-2">Note</th>
+      <th class="text-right p-2">In / Out</th><th class="text-right p-2">Balance</th><th class="text-left p-2">Action</th></tr></thead><tbody>
+      ${rows.map(t=>`<tr><td class="p-2 text-xs faint whitespace-nowrap">${new Date(t.ts).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})}</td>
+      <td class="p-2"><span class="text-[11px] px-2 py-1 rounded-full" style="border:1px solid var(--line)">${t.type}</span></td>
+      <td class="p-2 text-xs muted">${esc(t.note||'—')}</td>
+      <td class="p-2 text-right font-semibold whitespace-nowrap" style="color:${(+t.amount||0)>=0?'#3E5A3E':'#9E4A2D'}">${(+t.amount||0)>=0?'+':''}${fmt(t.amount)}</td>
+      <td class="p-2 text-right faint whitespace-nowrap">${fmt(t.bal)}</td>
+      <td class="p-2"><button onclick="delTxn('${t.id}')" class="text-xs underline faint">reverse</button></td></tr>`).join('')}
+      </tbody></table></div></div>`;
+  }).join('');
+  body.innerHTML=html;
+}
+function exportCatCSV(){
+  const sel=document.getElementById('logCat');
+  const cat=DB.categories.find(c=>c.id===sel.value)||DB.categories[0];
+  if(!cat) return alert('No category selected.');
+  const {shown,carry}=logFiltered(cat);
+  const q=v=>`"${String(v??'').replace(/"/g,'""')}"`;
+  const rows=[['category',q(cat.name)],['opening',cat.openingBalance],['carried_in',carry],[],
+    ['date','time','type','note','amount','running_balance'],
+    ...shown.map(t=>[dayKey(t.ts),new Date(t.ts).toLocaleTimeString('en-IN'),t.type,q(t.note||''),t.amount,t.bal])];
+  const b=new Blob([rows.map(r=>r.join(',')).join('\n')],{type:'text/csv'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download=`dynaledger-log-${cat.name.replace(/[^\w\-]+/g,'-')}.csv`; a.click();
 }
 function renderLedger(){
   refreshSelects();
   const c=document.getElementById('ledCat').value, ty=document.getElementById('ledType').value;
   const rows=[...DB.transactions].sort((a,b)=>b.ts-a.ts).filter(t=>(!c||t.categoryId===c)&&(!ty||t.type===ty));
   document.getElementById('ledBody').innerHTML=rows.map(t=>`<tr><td class="p-3 text-xs faint">${new Date(t.ts).toLocaleString()}</td><td class="p-3">${esc(catName(t.categoryId))}</td><td class="p-3"><span class="text-[11px] px-2 py-1 rounded-full" style="border:1px solid var(--line)">${t.type}</span></td><td class="p-3 text-right font-semibold" style="color:${t.amount>=0?'#3E5A3E':'#9E4A2D'}">${fmt(t.amount)}</td><td class="p-3 text-xs faint">${esc(t.note||'')}</td><td class="p-3"><button onclick="delTxn('${t.id}')" class="text-xs underline faint">reverse</button></td></tr>`).join('')||'<tr><td colspan=6 class="p-4 faint">No entries.</td></tr>';
+  if(ledMode==='cat')renderCatLog();
 }
 
 /* ---- charts ---- */
