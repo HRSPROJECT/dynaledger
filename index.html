@@ -51,6 +51,7 @@
   a, button.underline { color:var(--clay); }
   * { -webkit-tap-highlight-color: transparent; }
   button { touch-action: manipulation; }
+  .hidden { display:none !important; } /* fallback so modals/tabs stay hidden even if the CDN CSS is unreachable offline */
   .netdot { display:inline-block; width:9px; height:9px; border-radius:99px; background:#B3AC9D; margin-right:6px; vertical-align:1px; }
   .netdot.on { background:#5B7A5A; } .netdot.off { background:#9E4A2D; }
   .synccode { font-family: Newsreader, Georgia, serif; font-size:2.6rem; letter-spacing:.35em; text-indent:.35em; }
@@ -71,7 +72,7 @@
     #mnav button.mactive { color:var(--ink); background:var(--clay-soft); font-weight:600; }
     #mnav button.mfab { color:#FDFCF9; background:var(--clay); font-weight:700; margin:-1.4rem .2rem 0; border-radius:14px; box-shadow:0 6px 16px rgba(158,74,45,.35); }
     .sheet-modal { align-items:flex-end !important; padding:0 !important; }
-    .sheet-modal .card { border-radius:18px 18px 0 0; max-height:92dvh; overflow-y:auto; padding-bottom:calc(1.5rem + env(safe-area-inset-bottom)) !important; }
+    .sheet-modal .card { border-radius:18px 18px 0 0; max-height:92vh; max-height:92dvh; overflow-y:auto; padding-bottom:calc(1.5rem + env(safe-area-inset-bottom)) !important; }
     .card.p-6 { padding:1.1rem !important; }
   }
 </style>
@@ -114,6 +115,7 @@
     <button onclick="openModal('txnModal')" class="mfab"><span class="ico">+</span>Add</button>
     <button id="m-relations" onclick="switchTab('relations')"><span class="ico">⇄</span>Flows</button>
     <button id="m-ledger" onclick="switchTab('ledger')"><span class="ico">≡</span>Ledger</button>
+    <button id="m-settings" onclick="switchTab('settings')"><span class="ico">⚙</span>Setup</button>
   </nav>
 
   <!-- DASHBOARD -->
@@ -161,7 +163,7 @@
   <section id="view-ledger" class="hidden">
     <div class="card p-6 mb-5 flex flex-wrap gap-3">
       <select id="ledCat" class="inp !w-56" onchange="renderLedger()"><option value="">All categories</option></select>
-      <select id="ledType" class="inp !w-48" onchange="renderLedger()"><option value="">All types</option><option>credit</option><option>debit</option><option>transfer</option><option>relation</option><option>auto</option><option>opening</option></select>
+      <select id="ledType" class="inp !w-48" onchange="renderLedger()"><option value="">All types</option><option>credit</option><option>debit</option><option>transfer</option><option>relation</option><option>auto</option><option>adjust</option><option>opening</option></select>
       <button onclick="exportCSV()" class="btn-g">Export CSV</button>
     </div>
     <div class="card p-6 overflow-auto"><table class="w-full text-sm"><thead><tr><th class="text-left p-3">Date</th><th class="text-left p-3">Category</th><th class="text-left p-3">Type</th><th class="text-right p-3">Amount</th><th class="text-left p-3">Note</th><th class="text-left p-3">Action</th></tr></thead><tbody id="ledBody"></tbody></table></div>
@@ -327,13 +329,22 @@ function saveCategory(){
     openingBalance:+document.getElementById('cOpen').value||0, minBalance:+document.getElementById('cMin').value||0,
     autoDailyAmount:+document.getElementById('cAuto').value||0, autoEnabled:document.getElementById('cAutoOn').checked,
     note:document.getElementById('cNote').value, updatedAt:Date.now() };
-  if(ex){ data.balance=ex.balance; data.createdAt=ex.createdAt; data.lastAutoApplied=ex.lastAutoApplied; data.lastAutoDate=ex.lastAutoDate||(ex.lastAutoApplied?dayKey(ex.lastAutoApplied):dayKey(ex.createdAt||Date.now())); Object.assign(ex,data); }
+  if(ex){
+    const openDelta=(+data.openingBalance||0)-(+ex.openingBalance||0);
+    const newlyAuto=data.autoEnabled&&!ex.autoEnabled;
+    data.balance=(+ex.balance||0)+openDelta;
+    data.createdAt=ex.createdAt; data.lastAutoApplied=ex.lastAutoApplied;
+    data.lastAutoDate=ex.lastAutoDate||(ex.lastAutoApplied?dayKey(ex.lastAutoApplied):dayKey(ex.createdAt||Date.now()));
+    if(newlyAuto){ data.lastAutoDate=dayKey(Date.now()); data.lastAutoApplied=Date.now(); } // fresh start, no surprise backfill
+    Object.assign(ex,data);
+    if(openDelta!==0) DB.transactions.push({id:uid(),ts:Date.now(),type:'adjust',categoryId:id,amount:openDelta,note:'Opening balance corrected'});
+  }
   else{ data.balance=data.openingBalance; data.createdAt=Date.now(); data.lastAutoApplied=Date.now(); data.lastAutoDate=dayKey(Date.now());
     DB.categories.push(data);
     DB.transactions.push({id:uid(),ts:Date.now(),type:'opening',categoryId:id,amount:data.openingBalance,note:'Opening balance'}); }
   save(); closeModal('catModal'); clearCatForm(); render();
 }
-function clearCatForm(){ ['cId','cName','cOpen','cMin','cAuto','cNote'].forEach(i=>document.getElementById(i).value=i==='cId'?'':''); document.getElementById('cAutoOn').checked=false; document.getElementById('catModalTitle').innerText='New category'; }
+function clearCatForm(){ ['cId','cName','cOpen','cMin','cAuto','cNote'].forEach(i=>document.getElementById(i).value=i==='cId'?'':''); document.getElementById('cColor').value='#C15F3C'; document.getElementById('cNature').value='debit'; document.getElementById('cAutoOn').checked=false; document.getElementById('catModalTitle').innerText='New category'; }
 function editCategory(id){ const c=DB.categories.find(x=>x.id===id); if(!c)return; document.getElementById('cId').value=c.id; document.getElementById('cName').value=c.name; document.getElementById('cNature').value=c.nature; document.getElementById('cColor').value=c.color; document.getElementById('cOpen').value=c.openingBalance; document.getElementById('cMin').value=c.minBalance; document.getElementById('cAuto').value=c.autoDailyAmount; document.getElementById('cAutoOn').checked=c.autoEnabled; document.getElementById('cNote').value=c.note||''; document.getElementById('catModalTitle').innerText='Edit category'; openModal('catModal'); }
 function delCategory(id){ if(!confirm('Delete category + its relations? Transactions kept.'))return; DB.categories=DB.categories.filter(c=>c.id!==id); DB.relations=DB.relations.filter(r=>r.sourceId!==id&&r.targetId!==id); save(); render(); }
 function catName(id){ return (DB.categories.find(c=>c.id===id)||{}).name||'—'; }
@@ -517,15 +528,15 @@ function drawCharts(){
 
 /* ---- import/export ---- */
 function exportJSON(){ const b=new Blob([JSON.stringify(DB,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='dynaledger-backup.json'; a.click(); }
-function importJSON(e){ const f=e.target.files[0]; if(!f)return; const r=new FileReader(); r.onload=()=>{ try{DB=JSON.parse(r.result);save();render();alert('Imported!');}catch(_){alert('Bad file');} }; r.readAsText(f); }
-function exportCSV(){ const rows=[['date','category','type','amount','note'],...[...DB.transactions].sort((a,b)=>b.ts-a.ts).map(t=>[new Date(t.ts).toISOString(),catName(t.categoryId),t.type,t.amount,`"${(t.note||'').replace(/"/g,'""')}"`])]; const b=new Blob([rows.map(r=>r.join(',')).join('\n')],{type:'text/csv'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='dynaledger-ledger.csv'; a.click(); }
+function importJSON(e){ const f=e.target.files[0]; if(!f)return; const r=new FileReader(); r.onload=()=>{ try{ const d=JSON.parse(r.result); if(!d||!Array.isArray(d.categories)||!Array.isArray(d.transactions)) throw 0; DB={currency:'₹',categories:[],relations:[],transactions:[],...d}; migrateAutoDates(); runAutoUpdate(false); save(); render(); alert('Imported!'); }catch(_){ alert('That file is not a valid DynaLedger backup.'); } }; r.readAsText(f); e.target.value=''; }
+function exportCSV(){ const q=v=>`"${String(v??'').replace(/"/g,'""')}"`; const rows=[['date','category','type','amount','note'],...[...DB.transactions].sort((a,b)=>b.ts-a.ts).map(t=>[new Date(t.ts).toISOString(),q(catName(t.categoryId)),t.type,t.amount,q(t.note||'')])]; const b=new Blob([rows.map(r=>r.join(',')).join('\n')],{type:'text/csv'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='dynaledger-ledger.csv'; a.click(); }
 function saveCurrency(){ DB.currency=document.getElementById('currencyInp').value||'₹'; save(); render(); }
 function wipeAll(){ if(!confirm('Delete ALL data?'))return; DB={categories:[],relations:[],transactions:[],currency:'₹'}; save(); render(); }
 function seedDemo(){
   if(DB.categories.length&&!confirm('Add demo data on top?'))return;
-  const mk=(name,nature,bal,min,auto,color)=>{const id=uid();const now=Date.now();DB.categories.push({id,name,nature,balance:bal,openingBalance:bal,minBalance:min,color:color||'#C15F3C',autoDailyAmount:auto||0,autoEnabled:!!auto,note:'',createdAt:now,lastAutoApplied:now,lastAutoDate:dayKey(now),updatedAt:now});return id;};
-  const salary=mk('Salary (income)','credit',0,0,0,'#A07C2C'), save=mk('Savings','debit',5000,2000,50,'#5B7A5A'), rent=mk('Rent','debit',0,0,0,'#C15F3C'), food=mk('Food','debit',2000,500,-20,'#7A6A53'), loan=mk('Loan owed','credit',20000,0,0,'#4F5B66');
-  DB.relations.push({id:uid(),sourceId:salary,targetId:save,mode:'percent',value:20,deductFromSource:true,active:true,updatedAt:Date.now()});
+  const mk=(name,nature,bal,min,auto,color)=>{const id=uid();const now=Date.now();DB.categories.push({id,name,nature,balance:bal,openingBalance:bal,minBalance:min,color:color||'#C15F3C',autoDailyAmount:auto||0,autoEnabled:!!auto,note:'',createdAt:now,lastAutoApplied:now,lastAutoDate:dayKey(now),updatedAt:now});DB.transactions.push({id:uid(),ts:now,type:'opening',categoryId:id,amount:bal,note:'Opening balance'});return id;};
+  const salary=mk('Salary (income)','credit',0,0,0,'#A07C2C'), savId=mk('Savings','debit',5000,2000,50,'#5B7A5A'), rent=mk('Rent','debit',0,0,0,'#C15F3C'), food=mk('Food','debit',2000,500,-20,'#7A6A53'), loan=mk('Loan owed','credit',20000,0,0,'#4F5B66');
+  DB.relations.push({id:uid(),sourceId:salary,targetId:savId,mode:'percent',value:20,deductFromSource:true,active:true,updatedAt:Date.now()});
   DB.relations.push({id:uid(),sourceId:salary,targetId:rent,mode:'percent',value:30,deductFromSource:true,active:true,updatedAt:Date.now()});
   DB.relations.push({id:uid(),sourceId:salary,targetId:food,mode:'percent',value:10,deductFromSource:false,active:true,updatedAt:Date.now()});
   save(); render(); switchTab('dashboard');
