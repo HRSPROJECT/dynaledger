@@ -1039,10 +1039,11 @@ function importBackup(e) {
   r.onload = () => {
     try {
       const d = JSON.parse(r.result);
-      if (!d || d.v !== 2 || !Array.isArray(d.accounts) || !Array.isArray(d.transactions)) throw 0;
+      if (!d || ![2, 3].includes(d.v) || !Array.isArray(d.accounts) || !Array.isArray(d.transactions)) throw 0;
       try { localStorage.setItem(LS + '.backup-' + Date.now(), JSON.stringify(DB)); } catch (x) {}
       DB = Object.assign(defaultDB(), d);
-      audit('import', 'Backup imported (' + d.transactions.length + ' entries)', '', '');
+      const migrated = migrateV3();
+      audit('import', 'Backup imported (' + d.transactions.length + ' entries)' + (migrated ? ' + upgraded to v3' : ''), '', '');
       save(); UI.dailyAcct = primaryAcct().id; toast('Backup imported.'); go('dashboard');
     } catch (x) { toast('Not a valid CashBook backup.', 'err'); }
   };
