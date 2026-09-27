@@ -199,7 +199,19 @@
       <h3 class="text-2xl font-medium mb-2">Auto-update, per category</h3>
       <p class="text-sm muted mb-4">Optional. For example, Savings +₹50 a day, Petty-cash −₹20 a day. Applied automatically from the days elapsed since the last run — on open, and every minute after.</p>
       <div id="autoList" class="space-y-3"></div>
-      <button onclick="runAutoUpdate(true)" class="btn-p mt-4">Run auto-update now</button>
+      <button onclick="runAutoUpdate(true)" class="btn-p mt-4">Run daily jobs now</button>
+    </div>
+    <div class="card p-6 mb-5">
+      <p class="eyebrow mb-1">Every-day transfers</p>
+      <h3 class="text-2xl font-medium mb-2">Daily routes</h3>
+      <p class="text-sm muted mb-4">Move a fixed amount from one category to another <b>automatically, every day</b> — as many routes per category as you like. E.g. Cash Sale → ₹100/day to Back Drawer <b>and</b> ₹600/day to Insurance. Missed days are caught up on next open (limited by available balance). Every movement is written to the logs.</p>
+      <div class="grid md:grid-cols-4 gap-3">
+        <div><label class="eyebrow">From category</label><select id="schedSource" class="inp mt-1"></select></div>
+        <div><label class="eyebrow">To category</label><select id="schedTarget" class="inp mt-1"></select></div>
+        <div><label class="eyebrow">₹ per day</label><input id="schedAmt" type="number" min="0" step="0.01" class="inp mt-1" placeholder="e.g. 100"></div>
+        <div class="flex items-end"><button onclick="addSchedule()" class="btn-p w-full">Add route</button></div>
+      </div>
+      <div id="schedList" class="space-y-3 mt-4"></div>
     </div>
     <div class="card p-6 mb-5" id="syncCard">
       <p class="eyebrow mb-1">Devices</p>
@@ -302,14 +314,14 @@
 
 <script>
 const LS='dynaLedgerV1';
-let DB={categories:[],relations:[],transactions:[],currency:'₹'};
+let DB={categories:[],relations:[],schedules:[],transactions:[],currency:'₹'};
 let charts={};
 const uid=()=>Math.random().toString(36).slice(2,9);
 const fmt=n=>(DB.currency||'₹')+Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:2});
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 /* ---- persistence ---- */
-function load(){ try{const r=localStorage.getItem(LS); if(r) DB={currency:'₹',categories:[],relations:[],transactions:[],...JSON.parse(r)};}catch(e){} }
+function load(){ try{const r=localStorage.getItem(LS); if(r) DB={currency:'₹',categories:[],relations:[],schedules:[],transactions:[],...JSON.parse(r)};}catch(e){} }
 function save(){ DB.savedAt=Date.now(); localStorage.setItem(LS,JSON.stringify(DB)); }
 
 /* ---- calendar-day helpers (auto-update accuracy) ---- */
@@ -335,6 +347,11 @@ function migrateAutoDates(){
     if(c.updatedAt===undefined){ c.updatedAt=c.createdAt||0; touched=true; }
   });
   DB.relations.forEach(r=>{ if(r.updatedAt===undefined){ r.updatedAt=0; touched=true; } });
+  if(!Array.isArray(DB.schedules)){ DB.schedules=[]; touched=true; }
+  DB.schedules.forEach(s=>{
+    if(s.updatedAt===undefined){ s.updatedAt=0; touched=true; }
+    if(!s.lastRunDate){ s.lastRunDate=dayKey(Date.now()); touched=true; }
+  });
   if(touched) save();
 }
 
@@ -448,16 +465,60 @@ function accrueOne(c, todayK, now, log){
 }
 function runAutoUpdate(manual){
   const now=Date.now(), todayK=dayKey(now);
-  let applied=0, daysTotal=0;
+  let applied=0, daysTotal=0, routes=0, routedDays=0;
   DB.categories.forEach(c=>{
     if(!c.autoEnabled||!(+c.autoDailyAmount)) return;
     if(!c.lastAutoDate) c.lastAutoDate=c.lastAutoApplied?dayKey(c.lastAutoApplied):(c.createdAt?dayKey(c.createdAt):todayK);
     const d=accrueOne(c,todayK,now);
     if(d>0){ applied++; daysTotal+=d; }
   });
+  (DB.schedules||[]).forEach(s=>{
+    if(!s.active||!(+s.dailyAmount)) return;
+    const src=DB.categories.find(c=>c.id===s.sourceId), tgt=DB.categories.find(c=>c.id===s.targetId);
+    if(!src||!tgt) return;
+    if(!s.lastRunDate) s.lastRunDate=todayK; // routes start on creation day — never silent backfill
+    const days=Math.max(0,daysBetween(s.lastRunDate,todayK));
+    if(days<1) return;
+    const want=(+s.dailyAmount)*days;
+    const give=Math.min(want,Math.max(0,+src.balance||0));
+    s.lastRunDate=todayK; s.updatedAt=now;
+    if(give>0){
+      src.balance=(+src.balance||0)-give; tgt.balance=(+tgt.balance||0)+give;
+      src.updatedAt=now; tgt.updatedAt=now;
+      const partial=give<want;
+      DB.transactions.push({id:uid(),ts:now,type:'auto',categoryId:src.id,amount:-give,note:`Daily route → ${tgt.name} (${fmt(s.dailyAmount)}/day × ${days}d${partial?' · partial, low balance':''})`,relatedCategoryId:tgt.id});
+      DB.transactions.push({id:uid(),ts:now,type:'auto',categoryId:tgt.id,amount:give,note:`Daily route ← ${src.name} (${fmt(s.dailyAmount)}/day × ${days}d${partial?' · partial':''})`,relatedCategoryId:src.id});
+      routes++; routedDays+=days;
+    }
+  });
   save(); render();
-  if(manual) alert(applied?`Auto-update applied: ${applied} categor${applied>1?'ies':'y'} caught up by ${daysTotal} day${daysTotal>1?'s':''} in total.`:'Everything is already up to date as of today.');
+  if(manual){
+    const bits=[];
+    if(applied) bits.push(`${applied} auto-growth categor${applied>1?'ies':'y'} caught up by ${daysTotal} day${daysTotal>1?'s':''}`);
+    if(routes) bits.push(`${routes} daily route${routes>1?'s':''} moved money for ${routedDays} day${routedDays>1?'s':''}`);
+    alert(bits.length?bits.join('\n'):'Everything is already up to date as of today.');
+  }
 }
+
+/* ---- daily routes (scheduled transfers) ---- */
+function schedulesOf(catId){ return (DB.schedules||[]).filter(s=>s.active&&(s.sourceId===catId||s.targetId===catId)); }
+function pendingSchedDays(s){
+  if(!s.active||!(+s.dailyAmount)) return 0;
+  return Math.max(0,daysBetween(s.lastRunDate||dayKey(Date.now()),dayKey(Date.now())));
+}
+function addSchedule(){
+  const src=document.getElementById('schedSource').value, tgt=document.getElementById('schedTarget').value, amt=+document.getElementById('schedAmt').value;
+  if(!src||!tgt) return alert('Pick the from and to categories.');
+  if(src===tgt) return alert('From and to must be different categories.');
+  if(!(amt>0)) return alert('Enter an amount greater than 0 per day.');
+  DB.schedules.push({id:uid(),sourceId:src,targetId:tgt,dailyAmount:amt,active:true,lastRunDate:dayKey(Date.now()),updatedAt:Date.now()});
+  document.getElementById('schedAmt').value='';
+  save(); render();
+}
+function toggleSchedule(id){ const s=DB.schedules.find(x=>x.id===id); if(!s)return; s.active=!s.active; s.updatedAt=Date.now();
+  if(s.active) s.lastRunDate=dayKey(Date.now()); // resume fresh — no surprise catch-up
+  save(); render(); }
+function delSchedule(id){ if(!confirm('Delete this daily route? Past movements stay in the logs.'))return; DB.schedules=DB.schedules.filter(s=>s.id!==id); save(); render(); }
 
 /* ---- dashboard/render ---- */
 function totals(){
@@ -470,7 +531,7 @@ function render(){
   document.getElementById('kpiNet').innerText=fmt(DB.categories.reduce((s,x)=>s+(+x.balance||0),0));
   document.getElementById('kpiDebit').innerText=fmt(t.debit);
   document.getElementById('kpiCredit').innerText=fmt(t.credit);
-  document.getElementById('kpiCount').innerText=`${DB.categories.length} categories • ${DB.relations.filter(r=>r.active).length} active rules`;
+  document.getElementById('kpiCount').innerText=`${DB.categories.length} categories • ${DB.relations.filter(r=>r.active).length} add-rules • ${(DB.schedules||[]).filter(s=>s.active).length} daily routes`;
   const today=new Date().toDateString(); let inn=0,out=0;
   DB.transactions.forEach(x=>{ if(new Date(x.ts).toDateString()===today){ if(x.amount>0)inn+=x.amount; else out+=x.amount; }});
   document.getElementById('kpiIn').innerText='+'+fmt(inn).replace(DB.currency,'');
@@ -485,14 +546,18 @@ function render(){
   const grid=document.getElementById('catGrid');
   grid.innerHTML=DB.categories.filter(c=>(!q||c.name.toLowerCase().includes(q))&&(!f||c.nature===f)).map(c=>{
     const rels=relationsOf(c.id);
-    const indep=rels.length===0;
+    const schs=schedulesOf(c.id);
+    const links=rels.length+schs.length;
+    const indep=links===0;
     const below=(+c.balance||0)<(+c.minBalance||0);
     return `<div class="card p-6" style="border-top:3px solid ${c.color}">
       <div class="flex justify-between items-start gap-2"><h3 class="text-xl font-medium">${esc(c.name)}</h3>
       <span class="text-[11px] px-2 py-1 rounded-full ${c.nature==='debit'?'badge-d':'badge-c'}">${c.nature.toUpperCase()}</span></div>
       <p class="text-3xl font-semibold my-2">${fmt(c.balance)}</p>
-      <p class="text-xs faint">floor ${fmt(c.minBalance)} ${below?'· below floor':''} &nbsp;·&nbsp; auto ${c.autoEnabled?(fmt(c.autoDailyAmount)+'/day'):'off'} &nbsp;·&nbsp; ${indep?'<span style="color:#5B7A5A">Independent</span>':`<span style="color:#9E4A2D">${rels.length} link(s)</span>`}</p>
-      ${rels.length?'<div class="text-[12px] mt-3 pt-3 space-y-1 muted" style="border-top:1px solid var(--line-soft)">'+rels.map(r=>`<div>— ${r.sourceId===c.id?`to ${esc(catName(r.targetId))} · <b>${r.mode==='percent'?r.value+'%':fmt(r.value)}</b> ${r.deductFromSource?'(moved)':'(mirrored)'}`:`from ${esc(catName(r.sourceId))}`}</div>`).join('')+'</div>':''}
+      <p class="text-xs faint">floor ${fmt(c.minBalance)} ${below?'· below floor':''} &nbsp;·&nbsp; auto ${c.autoEnabled?(fmt(c.autoDailyAmount)+'/day'):'off'} &nbsp;·&nbsp; ${indep?'<span style="color:#5B7A5A">Independent</span>':`<span style="color:#9E4A2D">${links} link(s)</span>`}</p>
+      ${links?'<div class="text-[12px] mt-3 pt-3 space-y-1 muted" style="border-top:1px solid var(--line-soft)">'
+        +rels.map(r=>`<div>— ${r.sourceId===c.id?`to ${esc(catName(r.targetId))} · <b>${r.mode==='percent'?r.value+'%':fmt(r.value)}</b> ${r.deductFromSource?'(moved)':'(mirrored)'}`:`from ${esc(catName(r.sourceId))}`}</div>`).join('')
+        +schs.map(s=>`<div>◷ ${s.sourceId===c.id?`${fmt(s.dailyAmount)}/day → ${esc(catName(s.targetId))}`:`${fmt(s.dailyAmount)}/day ← ${esc(catName(s.sourceId))}`} <span class="faint">(daily)</span></div>`).join('')+'</div>':''}
       ${c.note?`<p class="text-xs faint mt-2 italic">${esc(c.note)}</p>`:''}
       <div class="flex gap-2 mt-4 pt-4 flex-wrap" style="border-top:1px solid var(--line-soft)"><button onclick="quickTxn('${c.id}','credit')" class="btn-p !py-1.5 !px-3 text-sm">+ Add</button><button onclick="quickTxn('${c.id}','debit')" class="btn-g !py-1.5 !px-3 text-sm">− Out</button><button onclick="openCatLog('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm">Log</button><button onclick="editCategory('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm">Edit</button><button onclick="delCategory('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm" style="color:#9E4A2D">Delete</button></div>
     </div>`;}).join('')||'<p class="faint">No categories yet. Begin with + Category.</p>';
@@ -501,8 +566,8 @@ function render(){
   document.getElementById('relList').innerHTML=DB.relations.map(r=>`<div class="card p-5 flex flex-wrap items-center gap-3 text-sm ${r.active?'':'opacity-50'}">
     <span class="text-lg font-medium">${esc(catName(r.sourceId))}</span><span class="faint">→</span><span class="text-lg font-medium">${esc(catName(r.targetId))}</span>
     <span class="soft-row px-2 py-1 rounded">${r.mode==='percent'?r.value+'%':fmt(r.value)}</span>
-    <span class="text-xs faint">${r.deductFromSource?'moved · deducts source':'mirrored · source kept whole'}</span>
-    <span class="ml-auto flex gap-2"><button onclick="toggleRelation('${r.id}')" class="btn-g !py-1 !px-3 text-xs">${r.active?'Pause':'Resume'}</button><button onclick="editRelation('${r.id}')" class="btn-g !py-1 !px-3 text-xs">Edit</button><button onclick="delRelation('${r.id}')" class="btn-g !py-1 !px-3 text-xs" style="color:#9E4A2D">Delete</button></span></div>`).join('')||'<p class="faint">No relations — every category stands independent.</p>';
+    <span class="text-xs faint">${r.deductFromSource?'moved · deducts source':'mirrored · source kept whole'} · on each add</span>
+    <span class="ml-auto flex gap-2"><button onclick="toggleRelation('${r.id}')" class="btn-g !py-1 !px-3 text-xs">${r.active?'Pause':'Resume'}</button><button onclick="editRelation('${r.id}')" class="btn-g !py-1 !px-3 text-xs">Edit</button><button onclick="delRelation('${r.id}')" class="btn-g !py-1 !px-3 text-xs" style="color:#9E4A2D">Delete</button></span></div>`).join('')||'<p class="faint">No on-add rules — every category stands independent. (Time-based daily routes live under Settings.)</p>';
 
   // auto list
   document.getElementById('autoList').innerHTML=DB.categories.map(c=>{
@@ -512,6 +577,17 @@ function render(){
     <b class="w-40 font-medium">${esc(c.name)}</b><input type="number" value="${c.autoDailyAmount||0}" onchange="setAuto('${c.id}',this.value)" class="inp !w-32"><span class="text-xs faint">per day</span>
     <label class="text-xs muted flex gap-2 items-center"><input type="checkbox" ${c.autoEnabled?'checked':''} onchange="toggleAuto('${c.id}')" class="accent-[#C15F3C]"> enabled</label>
     <span class="text-[11px] faint ml-auto">since ${c.lastAutoDate||'—'}${c.autoEnabled?due:''}</span></div>`;}).join('');
+
+  // daily routes list
+  const sl=document.getElementById('schedList');
+  if(sl) sl.innerHTML=(DB.schedules||[]).map(s=>{
+    const pd=pendingSchedDays(s);
+    const due=pd>0?` · <b style="color:#9E4A2D">${pd} day${pd>1?'s':''} due (${fmt((+s.dailyAmount)*pd)})</b>`:' · up to date';
+    return `<div class="flex flex-wrap gap-2 items-center text-sm soft-row rounded-lg p-3 ${s.active?'':'opacity-50'}">
+    <b class="font-medium">${esc(catName(s.sourceId))}</b><span class="faint">→</span><b class="font-medium">${esc(catName(s.targetId))}</b>
+    <span class="soft-row px-2 py-1 rounded" style="background:#fff">${fmt(s.dailyAmount)}/day</span>
+    <span class="text-[11px] faint">since ${s.lastRunDate||'—'}${s.active?due:''}</span>
+    <span class="ml-auto flex gap-2"><button onclick="toggleSchedule('${s.id}')" class="btn-g !py-1 !px-3 text-xs">${s.active?'Pause':'Resume'}</button><button onclick="delSchedule('${s.id}')" class="btn-g !py-1 !px-3 text-xs" style="color:#9E4A2D">Delete</button></span></div>`;}).join('')||'<p class="faint text-sm">No daily routes yet — add your first one above.</p>';
 
   refreshSelects(); drawCharts();
 }
@@ -530,7 +606,7 @@ function toggleAuto(id){ const c=DB.categories.find(x=>x.id===id); if(!c)return;
 
 function refreshSelects(){
   const opts=DB.categories.map(c=>`<option value="${c.id}">${esc(c.name)} (${fmt(c.balance)})</option>`).join('');
-  ['tCat','xFrom','xTo','rSource','rTarget','ledCat'].forEach(id=>{ const el=document.getElementById(id); if(!el)return; const v=el.value; el.innerHTML=(id==='ledCat'?'<option value="">All categories</option>':'')+opts; if(v)el.value=v; });
+  ['tCat','xFrom','xTo','rSource','rTarget','ledCat','schedSource','schedTarget'].forEach(id=>{ const el=document.getElementById(id); if(!el)return; const v=el.value; el.innerHTML=(id==='ledCat'?'<option value="">All categories</option>':'')+opts; if(v)el.value=v; });
   const logEl=document.getElementById('logCat');
   if(logEl){ const v=logEl.value||(DB.categories[0]&&DB.categories[0].id); logEl.innerHTML=DB.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join(''); if(v)logEl.value=v; }
 }
@@ -631,7 +707,7 @@ function exportJSON(){ const b=new Blob([JSON.stringify(DB,null,2)],{type:'appli
 function importJSON(e){ const f=e.target.files[0]; if(!f)return; const r=new FileReader(); r.onload=()=>{ try{ const d=JSON.parse(r.result); if(!d||!Array.isArray(d.categories)||!Array.isArray(d.transactions)) throw 0; DB={currency:'₹',categories:[],relations:[],transactions:[],...d}; migrateAutoDates(); runAutoUpdate(false); save(); render(); alert('Imported!'); }catch(_){ alert('That file is not a valid DynaLedger backup.'); } }; r.readAsText(f); e.target.value=''; }
 function exportCSV(){ const q=v=>`"${String(v??'').replace(/"/g,'""')}"`; const rows=[['date','category','type','amount','note'],...[...DB.transactions].sort((a,b)=>b.ts-a.ts).map(t=>[new Date(t.ts).toISOString(),q(catName(t.categoryId)),t.type,t.amount,q(t.note||'')])]; const b=new Blob([rows.map(r=>r.join(',')).join('\n')],{type:'text/csv'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='dynaledger-ledger.csv'; a.click(); }
 function saveCurrency(){ DB.currency=document.getElementById('currencyInp').value||'₹'; save(); render(); }
-function wipeAll(){ if(!confirm('Delete ALL data?'))return; DB={categories:[],relations:[],transactions:[],currency:'₹'}; save(); render(); }
+function wipeAll(){ if(!confirm('Delete ALL data?'))return; DB={categories:[],relations:[],schedules:[],transactions:[],currency:'₹'}; save(); render(); }
 function seedDemo(){
   if(DB.categories.length&&!confirm('Add demo data on top?'))return;
   const mk=(name,nature,bal,min,auto,color)=>{const id=uid();const now=Date.now();DB.categories.push({id,name,nature,balance:bal,openingBalance:bal,minBalance:min,color:color||'#C15F3C',autoDailyAmount:auto||0,autoEnabled:!!auto,note:'',createdAt:now,lastAutoApplied:now,lastAutoDate:dayKey(now),updatedAt:now});DB.transactions.push({id:uid(),ts:now,type:'opening',categoryId:id,amount:bal,note:'Opening balance'});return id;};
@@ -737,9 +813,17 @@ function mergeIncoming(remote){
   });
   const tids=new Set(DB.transactions.map(t=>t.id));
   (remote.transactions||[]).forEach(rt=>{ if(!tids.has(rt.id)){ DB.transactions.push(rt); tids.add(rt.id); txns++; } });
+  if(!Array.isArray(DB.schedules)) DB.schedules=[];
+  const smap=new Map(DB.schedules.map(s=>[s.id,s]));
+  let routes=0;
+  (remote.schedules||[]).forEach(rs=>{
+    const local=smap.get(rs.id);
+    if(!local){ DB.schedules.push(rs); routes++; }
+    else if((rs.updatedAt||0)>=(local.updatedAt||0)){ Object.assign(local,rs); routes++; }
+  });
   if(remote.currency && !DB.currency) DB.currency=remote.currency;
   migrateAutoDates(); runAutoUpdate(false); save(); render();
-  return `${cats} categories, ${rels} rules, ${txns} entries merged`;
+  return `${cats} categories, ${rels} rules, ${routes} routes, ${txns} entries merged`;
 }
 function stopSync(silent){
   try{ syncConns.forEach(c=>c.close&&c.close()); }catch(e){}
