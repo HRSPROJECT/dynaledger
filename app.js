@@ -29,21 +29,51 @@ function isoWeek(k) { const d = new Date(parseDay(k).getTime()); d.setHours(0, 0
 let DB = null;
 function defaultDB() {
   const t = Date.now();
-  const mk = (name, open) => ({ id: uid(), name, opening: open, currency: '₹', status: 'active', createdAt: t, updatedAt: t });
+  const mk = (name, open, kind) => ({ id: uid(), name, opening: open, currency: '₹', kind: kind || 'cash', status: 'active', createdAt: t, updatedAt: t });
   const back = mk('Back Drawer', 0), bank = mk('Bank', 0), upi = mk('UPI', 0), cash = mk('Cash', 0), petty = mk('Petty Cash', 500000);
+  const heads = ['Electricity', 'Salary', 'Transport', 'Maintenance', 'Stationery', 'Food', 'Repairs', 'Miscellaneous'].map(n => mk(n, 0, 'expense'));
   return {
-    v: 2, seq: 0, accounts: [back, bank, upi, cash, petty],
+    v: 3, seq: 0, accounts: [back, bank, upi, cash, petty, ...heads],
     incomeCats: [{ id: uid(), name: 'Cash Sale', active: true }, { id: uid(), name: 'Other Income', active: true }],
-    expenseCats: ['Electricity', 'Salary', 'Transport', 'Maintenance', 'Stationery', 'Food', 'Repairs', 'Miscellaneous'].map(n => ({ id: uid(), name: n, active: true })),
     rules: [], transactions: [], closings: {}, audit: [],
     settings: { user: 'Owner', currency: '₹', primaryAccountId: back.id, preventNegative: true }
   };
 }
 function save() { DB.savedAt = Date.now(); try { localStorage.setItem(LS, JSON.stringify(DB)); } catch (e) { toast('Storage full — export a backup!', 'err'); } }
 function load() {
-  try { const r = localStorage.getItem(LS); if (r) { DB = Object.assign(defaultDB(), JSON.parse(r)); return; } } catch (e) {}
+  try { const r = localStorage.getItem(LS); if (r) { DB = Object.assign(defaultDB(), JSON.parse(r)); if (migrateV3()) save(); return; } } catch (e) {}
   DB = defaultDB();
   if (migrateV1()) save();
+}
+/* v2 → v3: expense categories become expense accounts; every expense gains its receiving leg */
+function migrateV3() {
+  if ((DB.v || 2) >= 3 && !DB.expenseCats) return false;
+  const t = Date.now(), byName = {};
+  const head = n => {
+    const k = n.toLowerCase();
+    if (byName[k]) return byName[k];
+    const ex = DB.accounts.find(a => a.kind === 'expense' && a.name.toLowerCase() === k);
+    if (ex) { byName[k] = ex.id; return ex.id; }
+    const a = { id: uid(), name: n.slice(0, 60), opening: 0, currency: '₹', kind: 'expense', status: 'active', createdAt: t, updatedAt: t };
+    DB.accounts.push(a); byName[k] = a.id; return a.id;
+  };
+  (DB.expenseCats || []).forEach(c => head(c.name));
+  DB.transactions.forEach(x => {
+    if (x.exp) return;
+    if (x.type === 'expense' || (x.type === 'reversal' && x.catKind === 'expense')) {
+      const hid = head(x.catName || 'Miscellaneous');
+      const g = x.group || uid(); x.group = g;
+      x.expAcct = hid;
+      DB.transactions.push({ id: uid(), txn: txnId(), ts: x.ts, bizDate: x.bizDate, type: 'transfer', accountId: hid,
+        catId: null, catKind: 'expense', catName: x.catName, ruleId: null, ruleName: '', amount: -x.amount,
+        note: `Expense ← ${acctName(x.accountId)}${x.note ? ' · ' + x.note : ''}`, method: x.method || '', by: x.by || 'Owner',
+        status: x.status, revOf: null, reversedBy: null, group: g, exp: true, expAcct: hid });
+    }
+  });
+  delete DB.expenseCats;
+  DB.v = 3;
+  audit('migrate', 'Expense categories converted to expense accounts (v3)', '', '');
+  return true;
 }
 /* best-effort import from the old single-file app */
 function migrateV1() {
@@ -52,7 +82,7 @@ function migrateV1() {
   try {
     const o = JSON.parse(raw), t = Date.now(), amap = {};
     (o.categories || []).forEach(c => {
-      const a = { id: uid(), name: String(c.name).slice(0, 60), opening: Math.round((+c.openingBalance || 0) * 100), currency: '₹', status: 'active', createdAt: t, updatedAt: t };
+      const a = { id: uid(), name: String(c.name).slice(0, 60), opening: Math.round((+c.openingBalance || 0) * 100), currency: '₹', kind: 'cash', status: 'active', createdAt: t, updatedAt: t };
       DB.accounts.push(a); amap[c.id] = a.id;
       if (a.opening) DB.transactions.push(mkTxn({ bizDate: dayKey(c.createdAt || t), ts: c.createdAt || t, type: 'opening', accountId: a.id, amount: a.opening, note: 'Opening balance (imported)' }));
     });
@@ -73,7 +103,9 @@ const acct = id => DB.accounts.find(a => a.id === id);
 const acctName = id => (acct(id) || {}).name || '—';
 const ruleById = id => DB.rules.find(r => r.id === id);
 const ruleName = id => (ruleById(id) || {}).name || '';
-const catNameOf = t => t.catName || (t.catKind === 'income' ? (DB.incomeCats.find(c => c.id === t.catId) || {}).name : (DB.expenseCats.find(c => c.id === t.catId) || {}).name) || '—';
+const catNameOf = t => t.catName || (t.catKind === 'income' ? (DB.incomeCats.find(c => c.id === t.catId) || {}).name : '') || '—';
+const expHeads = () => DB.accounts.filter(a => a.kind === 'expense');
+const cashAccts = () => DB.accounts.filter(a => (a.kind || 'cash') !== 'expense');
 
 /* ---------- audit ---------- */
 function audit(action, details, oldV, newV) {
@@ -187,19 +219,20 @@ function fireTxns(incomeTxn, plan) {
 
 /* ---------- actions (validate fully, then commit atomically) ---------- */
 function addIncome({ catId, amount, accountId, bizDate, note }) {
-  const cat = DB.incomeCats.find(c => c.id === catId && c.active);
+  const cat = catId ? DB.incomeCats.find(c => c.id === catId && c.active) : null;
+  if (catId && !cat) return { err: 'Pick an active income category.' };
+  const catName = cat ? cat.name : 'General Income';
   const ac = acct(accountId);
-  if (!cat) return { err: 'Pick an active income category.' };
   if (!ac || ac.status !== 'active') return { err: 'Pick an active account.' };
   if (!(amount > 0)) return { err: 'Amount must be greater than 0.' };
   if (!needUnlocked(bizDate)) return { err: 'locked' };
   const dayTotal = DB.transactions.filter(t => t.accountId === accountId && t.bizDate === bizDate && t.type === 'income' && t.status !== 'void').reduce((s, t) => s + t.amount, 0) + amount;
-  const incomeTxn = mkTxn({ bizDate, type: 'income', accountId, catId, catKind: 'income', catName: cat.name, amount, note });
+  const incomeTxn = mkTxn({ bizDate, type: 'income', accountId, catId: catId || null, catKind: 'income', catName, amount, note });
   const { plan } = planFiring({ trigger: amount, dayTotal, bizDate, srcAcct: accountId, incCatId: catId, pending: [incomeTxn] });
   const batch = fireTxns(incomeTxn, plan);
   batch.forEach(t => DB.transactions.push(t));
   const fired = plan.filter(p => !p.skip && p.deduct);
-  audit('income', `${cat.name} ${fmtP(amount)} → ${ac.name} (${fired.length} rule${fired.length === 1 ? '' : 's'} fired)`, '', incomeTxn.txn);
+  audit('income', `${catName} ${fmtP(amount)} → ${ac.name} (${fired.length} rule${fired.length === 1 ? '' : 's'} fired)`, '', incomeTxn.txn);
   save();
   if (DB.settings.preventNegative) {
     const b = balanceNow(accountId);
@@ -207,23 +240,38 @@ function addIncome({ catId, amount, accountId, bizDate, note }) {
   }
   return { txns: batch, fired };
 }
-function addExpense({ catId, customCat, amount, accountId, bizDate, method, note, allowNegative }) {
+/* An expense IS an account: booking moves money source → expense head.
+   Out-leg type 'expense', in-leg type 'transfer' flagged exp:true (mirror, excluded from flow buckets). */
+function addExpense({ headId, newHead, amount, accountId, bizDate, method, note, allowNegative }) {
   const ac = acct(accountId);
-  let catName = '';
-  if (catId) { const c = DB.expenseCats.find(x => x.id === catId && x.active); if (!c) return { err: 'Pick an active expense category.' }; catName = c.name; }
-  else if (customCat && customCat.trim()) catName = customCat.trim().slice(0, 60);
-  else return { err: 'Pick or type an expense category.' };
-  if (!ac || ac.status !== 'active') return { err: 'Pick an active account.' };
+  let head = headId ? acct(headId) : null;
+  if (newHead && newHead.trim()) {
+    const n = newHead.trim().slice(0, 60);
+    head = DB.accounts.find(a => a.kind === 'expense' && a.name.toLowerCase() === n.toLowerCase());
+    if (!head) {
+      const t = Date.now();
+      head = { id: uid(), name: n, opening: 0, currency: '₹', kind: 'expense', status: 'active', createdAt: t, updatedAt: t };
+      DB.accounts.push(head);
+      audit('account', 'Created expense head ' + n, '', '');
+    }
+  }
+  if (!head || head.kind !== 'expense' || head.status !== 'active') return { err: 'Pick an active expense head (or type a new one).' };
+  if (!ac || ac.status !== 'active') return { err: 'Pick an active source account.' };
+  if (ac.id === head.id) return { err: 'Source and expense head must differ.' };
   if (!(amount > 0)) return { err: 'Amount must be greater than 0.' };
   if (!needUnlocked(bizDate)) return { err: 'locked' };
   const avail = balanceNow(accountId);
   if (DB.settings.preventNegative && !allowNegative && amount > avail)
     return { blocked: true, available: avail, shortfall: amount - avail };
-  const t = mkTxn({ bizDate, type: 'expense', accountId, catId: catId || null, catKind: 'expense', catName, amount: -amount, note, method });
-  DB.transactions.push(t);
-  audit('expense', `${catName} ${fmtP(amount)} from ${ac.name}`, '', t.txn);
+  const g = uid();
+  const out = mkTxn({ bizDate, type: 'expense', accountId, catId: null, catKind: 'expense', catName: head.name, amount: -amount, note, method, group: g });
+  out.expAcct = head.id;
+  const inn = mkTxn({ bizDate, type: 'transfer', accountId: head.id, catId: null, catKind: 'expense', catName: head.name, amount, note: `Expense ← ${ac.name}${note ? ' · ' + note : ''}`, method, group: g });
+  inn.exp = true; inn.expAcct = head.id;
+  DB.transactions.push(out, inn);
+  audit('expense', `${head.name} ${fmtP(amount)} from ${ac.name}`, '', out.txn);
   save();
-  return { txn: t };
+  return { txn: out, inn };
 }
 function addTransfer({ fromId, toId, amount, bizDate, note }) {
   const A = acct(fromId), B = acct(toId);
@@ -250,6 +298,8 @@ function reverseTxn(id, reason) {
   const legs = t.group ? DB.transactions.filter(x => x.group === t.group && x.status === 'posted') : [t];
   const made = legs.map(l => {
     const r = mkTxn({ bizDate: l.bizDate, type: 'reversal', accountId: l.accountId, catId: l.catId, catKind: l.catKind, catName: l.catName, ruleId: l.ruleId, ruleName: l.ruleName, amount: -l.amount, note: `Reversal of ${l.txn}${reason ? ' · ' + reason : ''}`, revOf: l.id, group: l.group });
+    if (l.exp) r.exp = true;
+    if (l.expAcct) r.expAcct = l.expAcct;
     l.status = 'reversed'; l.reversedBy = r.id; return r;
   });
   made.forEach(m => DB.transactions.push(m));
@@ -263,6 +313,7 @@ function dayFigures(accountId, bizDate) {
   for (const t of DB.transactions) {
     if (t.accountId !== accountId || t.bizDate !== bizDate || t.status === 'void') continue;
     const a = t.amount || 0;
+    if (t.exp) { if (a >= 0) tin += a; else tout += a; continue; } // expense mirror leg — shown as transfer in/out of the head
     if (t.type === 'income') income += a;
     else if (t.type === 'deduction' || (t.type === 'reversal' && t.ruleId)) auto += a;
     else if (t.type === 'expense' || (t.type === 'reversal' && !t.ruleId)) exp += a;
@@ -375,19 +426,20 @@ function R_dashboard() {
   const P = primaryAcct(), today = todayKey(), F = dayFigures(P.id, today);
   const cashSaleToday = sumTxns(t => t.type === 'income' && t.catName === 'Cash Sale' && t.bizDate === today);
   const wkStart = addDays(today, -6);
-  const wkExp = -sumTxns(t => t.bizDate >= wkStart && (t.type === 'expense' || (t.type === 'deduction' && !t.ruleId)));
+  const isOut = t => t.type === 'expense' || t.type === 'deduction' || (t.type === 'reversal' && !t.ruleId && t.catKind === 'expense');
+  const wkExp = -sumTxns(t => t.bizDate >= wkStart && isOut(t));
   const [m0] = monthRange();
-  const mExp = -sumTxns(t => t.bizDate >= m0 && (t.type === 'expense' || t.type === 'deduction'));
+  const mExp = -sumTxns(t => t.bizDate >= m0 && isOut(t));
   const mAuto = -sumTxns(t => t.bizDate >= m0 && t.ruleId && (t.type === 'deduction' || t.type === 'transfer') && t.amount < 0);
   const mNet = sumTxns(t => t.bizDate >= m0);
   const days = [], lbl = [], inc = [], out = [];
   for (let i = 6; i >= 0; i--) { const d = addDays(today, -i); days.push(d); lbl.push(parseDay(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })); }
   days.forEach(d => {
     inc.push(sumTxns(t => t.bizDate === d && t.type === 'income'));
-    out.push(-sumTxns(t => t.bizDate === d && (t.type === 'expense' || t.type === 'deduction') && t.amount < 0));
+    out.push(-sumTxns(t => t.bizDate === d && (t.type === 'expense' || t.type === 'deduction' || (t.type === 'reversal' && !t.ruleId && t.catKind === 'expense'))));
   });
   const byCat = {};
-  DB.transactions.forEach(t => { if (t.bizDate >= m0 && t.status !== 'void' && (t.type === 'expense' || (t.type === 'deduction' && !t.dst)) && t.amount < 0) byCat[catNameOf(t) || ruleName(t.ruleId) || 'Other'] = (byCat[catNameOf(t) || ruleName(t.ruleId) || 'Other'] || 0) - t.amount; });
+  DB.transactions.forEach(t => { if (t.bizDate >= m0 && t.status !== 'void' && (t.type === 'expense' || t.type === 'deduction' || (t.type === 'reversal' && !t.ruleId && t.catKind === 'expense'))) byCat[catNameOf(t) || ruleName(t.ruleId) || 'Other'] = (byCat[catNameOf(t) || ruleName(t.ruleId) || 'Other'] || 0) - t.amount; });
   const segs = Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 7).map(([l, v], i) => ({ l, v, c: PAL[i % PAL.length] }));
   el.innerHTML = `
     <p class="eyebrow">Dashboard · ${prettyDay(today)}</p><h2 class="vtitle">${esc(P.name)} today</h2>
@@ -488,7 +540,7 @@ function txnMatches(t, f) {
   if (f.rule && t.ruleId !== f.rule) return false;
   if (f.from && t.bizDate < f.from) return false;
   if (f.to && t.bizDate > f.to) return false;
-  if (f.cat) { const c = (t.catId || '') + ' ' + (t.catName || '') + ' ' + (t.ruleName || ''); if (!c.toLowerCase().includes(f.cat.toLowerCase()) && t.catId !== f.cat && t.ruleId !== f.cat) return false; }
+  if (f.cat) { const c = (t.catId || '') + ' ' + (t.expAcct || '') + ' ' + (t.catName || '') + ' ' + (t.ruleName || ''); if (!c.toLowerCase().includes(f.cat.toLowerCase()) && t.catId !== f.cat && t.ruleId !== f.cat && t.expAcct !== f.cat) return false; }
   if (f.q) {
     const q = f.q.toLowerCase(), dig = f.q.replace(/[^\d]/g, '');
     const hay = [t.txn, t.note, t.catName, t.ruleName, acctName(t.accountId), t.type, t.by, fmtP(t.amount)].join(' ').toLowerCase();
@@ -504,7 +556,7 @@ function typeTag(t) {
 function R_txn() {
   const el = document.getElementById('view-transactions'), f = UI.f;
   if (UI.txnTab === 'audit') return R_audit(el);
-  const cats = [...DB.incomeCats.map(c => ({ id: c.id, n: c.name + ' (in)' })), ...DB.expenseCats.map(c => ({ id: c.id, n: c.name + ' (ex)' }))];
+  const cats = [...DB.incomeCats.map(c => ({ id: c.id, n: c.name + ' (in)' })), ...expHeads().map(c => ({ id: c.id, n: c.name + ' (head)' }))];
   const rows = DB.transactions.filter(t => t.status !== 'void' && txnMatches(t, f)).sort((a, b) => b.ts - a.ts).slice(0, 400);
   el.innerHTML = `
     <p class="eyebrow">Ledger</p><h2 class="vtitle">Transactions</h2>
@@ -555,7 +607,7 @@ function openIncome(d, a) {
   if (!cats.length) return toast('Create an income category first.', 'err');
   openModal(`<p class="eyebrow">Income</p><h3>Add income</h3>
     <form onsubmit="return doIncome()"><div class="grid g2">
-    <label class="f"><span>Category</span><select id="inCat" class="inp">${cats.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>
+    <label class="f"><span>Category (optional — why this money came)</span><select id="inCat" class="inp"><option value="">General (no category)</option>${cats.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>
     <label class="f"><span>Amount ₹</span><input id="inAmt" class="inp" inputmode="decimal" placeholder="0.00" required></label>
     <label class="f"><span>Destination account</span><select id="inAcct" class="inp">${DB.accounts.filter(x => x.status === 'active').map(x => `<option value="${x.id}" ${(a || primaryAcct().id) === x.id ? 'selected' : ''}>${esc(x.name)} — ${fmtP(balanceNow(x.id))}</option>`).join('')}</select></label>
     <label class="f"><span>Date</span><input id="inDate" type="date" class="inp" value="${d || todayKey()}" max="${todayKey()}"></label></div>
@@ -594,32 +646,31 @@ function R_income() {
     ${rows.map(t => `<tr><td style="font-size:.8rem">${prettyDay(t.bizDate)}</td><td>${esc(catNameOf(t))}<br><span class="faint" style="font-size:.75rem">${esc(t.note || '')}</span></td><td>${esc(acctName(t.accountId))}</td><td class="r pos"><b>${fmtP(t.amount)}</b></td><td>${!isLocked(t.bizDate) ? `<button class="link" onclick="askReverse('${t.id}')">reverse</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">No income yet.</div></td></tr>'}
     </tbody></table></div></div>
     <div class="card pad"><p class="eyebrow">Income categories</p>
-    ${DB.incomeCats.map(c => `<div class="kv"><span>${esc(c.name)} ${c.active ? '' : '<span class="tag">off</span>'}</span><span><button class="link" onclick="toggleCat('income','${c.id}')">${c.active ? 'disable' : 'enable'}</button></span></div>`).join('')}
-    <form onsubmit="return addCatUI('income')" style="display:flex;gap:.5rem;margin-top:.8rem"><input id="newInCat" class="inp" placeholder="New category name"><button class="btn-g" type="submit">Add</button></form></div></div>`;
+    ${DB.incomeCats.map(c => `<div class="kv"><span>${esc(c.name)} ${c.active ? '' : '<span class="tag">off</span>'}</span><span><button class="link" onclick="toggleCat('${c.id}')">${c.active ? 'disable' : 'enable'}</button></span></div>`).join('')}
+    <form onsubmit="return addCatUI()" style="display:flex;gap:.5rem;margin-top:.8rem"><input id="newInCat" class="inp" placeholder="New category name"><button class="btn-g" type="submit">Add</button></form></div></div>`;
 }
-function toggleCat(kind, id) {
-  const list = kind === 'income' ? DB.incomeCats : DB.expenseCats;
-  const c = list.find(x => x.id === id); if (!c) return;
-  c.active = !c.active; audit('category', `${kind} category ${c.name} ${c.active ? 'enabled' : 'disabled'}`, '', ''); save(); go(UI.tab);
+function toggleCat(id) {
+  const c = DB.incomeCats.find(x => x.id === id); if (!c) return;
+  c.active = !c.active; audit('category', `income category ${c.name} ${c.active ? 'enabled' : 'disabled'}`, '', ''); save(); go(UI.tab);
 }
-function addCatUI(kind) {
-  const inp = document.getElementById(kind === 'income' ? 'newInCat' : 'newExCat');
+function addCatUI() {
+  const inp = document.getElementById('newInCat');
   const n = inp.value.trim(); if (!n) return false;
-  const list = kind === 'income' ? DB.incomeCats : DB.expenseCats;
-  if (list.some(c => c.name.toLowerCase() === n.toLowerCase())) { toast('That category already exists.', 'err'); return false; }
-  list.push({ id: uid(), name: n.slice(0, 60), active: true });
-  audit('category', `${kind} category created: ${n}`, '', ''); save(); go(UI.tab); return false;
+  if (DB.incomeCats.some(c => c.name.toLowerCase() === n.toLowerCase())) { toast('That category already exists.', 'err'); return false; }
+  DB.incomeCats.push({ id: uid(), name: n.slice(0, 60), active: true });
+  audit('category', 'income category created: ' + n, '', ''); save(); go(UI.tab); return false;
 }
-/* ---------- expenses ---------- */
+/* ---------- expenses (expense = account) ---------- */
 let _allowOnce = null;
 function openExpense(d, a, preset) {
-  const cats = DB.expenseCats.filter(c => c.active);
+  const heads = expHeads().filter(h => h.status === 'active');
   openModal(`<p class="eyebrow">Expense</p><h3>Add expense</h3>
+    <p class="muted" style="font-size:.85rem;margin-top:-.6rem">Money moves from the source account into the expense head — the head's balance is its total spend.</p>
     <form onsubmit="return doExpense(false)"><div class="grid g2">
-    <label class="f"><span>Category</span><select id="exCat" class="inp"><option value="">— pick or type below —</option>${cats.map(c => `<option value="${c.id}" ${preset === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
-    <label class="f"><span>Or new category name</span><input id="exCustom" class="inp" placeholder="e.g. Diwali gifts"></label>
+    <label class="f"><span>Expense head (account)</span><select id="exHead" class="inp">${heads.map(h => `<option value="${h.id}" ${preset === h.id ? 'selected' : ''}>${esc(h.name)} — spent ${fmtP(balanceNow(h.id))}</option>`).join('')}</select></label>
+    <label class="f"><span>Or create new head</span><input id="exNewHead" class="inp" placeholder="e.g. Diwali gifts"></label>
     <label class="f"><span>Amount ₹</span><input id="exAmt" class="inp" inputmode="decimal" placeholder="0.00" required></label>
-    <label class="f"><span>Source account</span><select id="exAcct" class="inp">${DB.accounts.filter(x => x.status === 'active').map(x => `<option value="${x.id}" ${(a || primaryAcct().id) === x.id ? 'selected' : ''}>${esc(x.name)} — ${fmtP(balanceNow(x.id))}</option>`).join('')}</select></label>
+    <label class="f"><span>Source account</span><select id="exAcct" class="inp">${cashAccts().filter(x => x.status === 'active').map(x => `<option value="${x.id}" ${(a || primaryAcct().id) === x.id ? 'selected' : ''}>${esc(x.name)} — ${fmtP(balanceNow(x.id))}</option>`).join('')}</select></label>
     <label class="f"><span>Date</span><input id="exDate" type="date" class="inp" value="${d || todayKey()}" max="${todayKey()}"></label>
     <label class="f"><span>Payment method</span><select id="exMethod" class="inp"><option>Cash</option><option>UPI</option><option>Bank transfer</option><option>Card</option><option>Other</option></select></label></div>
     <label class="f"><span>Description / notes</span><input id="exNote" class="inp" placeholder="optional"></label>
@@ -628,7 +679,7 @@ function openExpense(d, a, preset) {
 }
 function doExpense(allow) {
   const amt = toPaise(document.getElementById('exAmt').value);
-  const args = { catId: document.getElementById('exCat').value || null, customCat: document.getElementById('exCustom').value, amount: amt, accountId: document.getElementById('exAcct').value, bizDate: document.getElementById('exDate').value || todayKey(), method: document.getElementById('exMethod').value, note: document.getElementById('exNote').value.trim(), allowNegative: !!allow };
+  const args = { headId: document.getElementById('exHead').value || null, newHead: document.getElementById('exNewHead').value, amount: amt, accountId: document.getElementById('exAcct').value, bizDate: document.getElementById('exDate').value || todayKey(), method: document.getElementById('exMethod').value, note: document.getElementById('exNote').value.trim(), allowNegative: !!allow };
   const r = addExpense(args);
   if (r.blocked) {
     _allowOnce = () => doExpense(true);
@@ -645,44 +696,42 @@ function doExpense(allow) {
 function R_exp() {
   const el = document.getElementById('view-expenses');
   const rows = DB.transactions.filter(t => t.type === 'expense' && t.status !== 'void').sort((a, b) => b.ts - a.ts).slice(0, 150);
-  const used = new Set(DB.transactions.map(t => t.catId).filter(Boolean));
-  el.innerHTML = `<p class="eyebrow">Expenses</p><h2 class="vtitle">Expenses</h2><p class="vsub">Defaults to ${esc(primaryAcct().name)}. Negative-balance protection applies.</p>
-    <div class="rowbtns" style="margin:0 0 1.1rem"><button class="btn" onclick="openExpense()">+ Add Expense</button></div>
-    <div class="grid g2"><div class="card pad"><div class="tblwrap"><table class="tbl"><thead><tr><th>Date</th><th>Category</th><th>Account</th><th style="text-align:right">Amount</th><th></th></tr></thead><tbody>
+  const spent = id => DB.transactions.filter(t => t.expAcct === id && t.type === 'expense' && t.status !== 'void').reduce((s, t) => s - t.amount, 0);
+  el.innerHTML = `<p class="eyebrow">Expenses</p><h2 class="vtitle">Expenses</h2><p class="vsub">Each expense moves money into its head account below. Defaults to ${esc(primaryAcct().name)}.</p>
+    <div class="rowbtns" style="margin:0 0 1.1rem"><button class="btn" onclick="openExpense()">+ Add Expense</button><button class="btn-g" onclick="go('accounts')">Manage heads</button></div>
+    <div class="grid g2"><div class="card pad"><div class="tblwrap"><table class="tbl"><thead><tr><th>Date</th><th>Head</th><th>From</th><th style="text-align:right">Amount</th><th></th></tr></thead><tbody>
     ${rows.map(t => `<tr><td style="font-size:.8rem">${prettyDay(t.bizDate)}</td><td>${esc(catNameOf(t))}<br><span class="faint" style="font-size:.75rem">${esc(t.note || '')}${t.method ? ' · ' + esc(t.method) : ''}</span></td><td>${esc(acctName(t.accountId))}</td><td class="r neg"><b>${fmtP(t.amount)}</b></td><td>${!isLocked(t.bizDate) ? `<button class="link" onclick="askReverse('${t.id}')">reverse</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">No expenses yet.</div></td></tr>'}
     </tbody></table></div></div>
-    <div class="card pad"><p class="eyebrow">Expense categories</p>
-    ${DB.expenseCats.map(c => { const u = used.has(c.id); return `<div class="kv"><span>${esc(c.name)} ${c.active ? '' : '<span class="tag">off</span>'} ${u ? '<span class="faint" style="font-size:.72rem">· has entries</span>' : ''}</span>
-      <span><button class="link" onclick="toggleCat('expense','${c.id}')">${c.active ? 'disable' : 'enable'}</button>${!u ? ` · <button class="link" onclick="delCatUI('${c.id}')">delete</button>` : ''}</span></div>`; }).join('')}
-    <form onsubmit="return addCatUI('expense')" style="display:flex;gap:.5rem;margin-top:.8rem"><input id="newExCat" class="inp" placeholder="New category name"><button class="btn-g" type="submit">Add</button></form>
-    <p class="faint" style="font-size:.78rem">Categories with entries cannot be deleted — disable them instead.</p></div></div>`;
+    <div class="card pad"><p class="eyebrow">Expense heads · total spend</p>
+    ${expHeads().filter(h => h.status === 'active').map(h => `<div class="kv"><span>${esc(h.name)}</span><b class="neg">${fmtP(spent(h.id))}</b></div>`).join('') || '<div class="empty">No heads yet — one is created with your first expense.</div>'}
+    <p class="faint" style="font-size:.78rem">Rename, deactivate or delete heads under Accounts. Heads with entries cannot be deleted.</p></div></div>`;
 }
-function delCatUI(id) {
-  if (DB.transactions.some(t => t.catId === id)) return toast('Has entries — disable instead.', 'err');
-  const i = DB.expenseCats.findIndex(c => c.id === id); if (i < 0) return;
-  confirmDlg('Delete category?', `“${esc(DB.expenseCats[i].name)}” has no entries and will be removed.`, 'Delete', () => {
-    audit('category', 'expense category deleted: ' + DB.expenseCats[i].name, '', ''); DB.expenseCats.splice(i, 1); save(); go(UI.tab);
-  });
-}
-/* ---------- accounts ---------- */
+/* ---------- accounts (cash accounts + expense heads — everything is an account) ---------- */
 function R_acct() {
   const el = document.getElementById('view-accounts');
-  el.innerHTML = `<p class="eyebrow">Accounts</p><h2 class="vtitle">Accounts</h2><p class="vsub">Balances are derived from the ledger — never typed in.</p>
-    <div class="rowbtns" style="margin:0 0 1.1rem"><button class="btn" onclick="openAccount()">+ Add Account</button><button class="btn-g" onclick="openTransfer()">Transfer Between Accounts</button></div>
-    <div class="grid g3">${DB.accounts.map(a => { const b = balanceNow(a.id); const used = DB.transactions.some(t => t.accountId === a.id);
-      return `<div class="card pad"><p class="eyebrow">${a.status === 'active' ? 'Account' : 'Inactive'}</p><h3 style="font-size:1.4rem">${esc(a.name)}</h3>
-      <p class="bignum ${b < 0 ? 'neg' : ''}" style="font-size:1.7rem">${fmtP(b)}</p>
-      <p class="faint" style="font-size:.78rem">Opening ${fmtP(a.opening)} · ${DB.transactions.filter(t => t.accountId === a.id && t.status !== 'void').length} entries</p>
+  const card = a => { const b = balanceNow(a.id); const used = DB.transactions.some(t => t.accountId === a.id);
+    const isExp = (a.kind || 'cash') === 'expense';
+    return `<div class="card pad"><p class="eyebrow">${isExp ? 'Expense head' : 'Account'}${a.status === 'active' ? '' : ' · inactive'}</p><h3 style="font-size:1.4rem">${esc(a.name)}</h3>
+      <p class="bignum ${b < 0 || isExp ? 'neg' : ''}" style="font-size:1.7rem">${fmtP(isExp ? b : b)}</p>
+      <p class="faint" style="font-size:.78rem">${isExp ? 'Total spend' : 'Opening ' + fmtP(a.opening)} · ${DB.transactions.filter(t => t.accountId === a.id && t.status !== 'void').length} entries</p>
       <div class="rowbtns"><button class="btn-g" onclick="acctStatement('${a.id}')">Statement</button><button class="btn-g" onclick="openAccount('${a.id}')">Edit</button>
-      ${used ? `<button class="btn-g" onclick="toggleAcct('${a.id}')">${a.status === 'active' ? 'Deactivate' : 'Activate'}</button>` : `<button class="btn-danger-g" onclick="delAcct('${a.id}')">Delete</button>`}</div></div>`; }).join('')}</div>`;
+      ${used ? `<button class="btn-g" onclick="toggleAcct('${a.id}')">${a.status === 'active' ? 'Deactivate' : 'Activate'}</button>` : `<button class="btn-danger-g" onclick="delAcct('${a.id}')">Delete</button>`}</div></div>`; };
+  el.innerHTML = `<p class="eyebrow">Accounts</p><h2 class="vtitle">Accounts</h2><p class="vsub">Everything is an account — cash accounts hold money, expense heads collect spend. Balances derive from the ledger.</p>
+    <div class="rowbtns" style="margin:0 0 1.1rem"><button class="btn" onclick="openAccount()">+ Add Account</button><button class="btn-g" onclick="openTransfer()">Transfer Between Accounts</button></div>
+    <p class="eyebrow" style="margin-bottom:.6rem">Cash accounts</p>
+    <div class="grid g3" style="margin-bottom:1.4rem">${cashAccts().map(card).join('') || '<div class="empty">None.</div>'}</div>
+    <p class="eyebrow" style="margin-bottom:.6rem">Expense heads</p>
+    <div class="grid g3">${expHeads().map(card).join('') || '<div class="empty">None yet — created automatically with your first expense.</div>'}</div>`;
 }
 function acctStatement(id) { UI.f = { q: '', from: '', to: '', acct: id, cat: '', type: '', rule: '' }; UI.txnTab = 'list'; go('transactions'); }
-function openAccount(id) {
+function openAccount(id, kind) {
   const a = id ? acct(id) : null;
-  openModal(`<p class="eyebrow">Account</p><h3>${a ? 'Edit' : 'Add'} account</h3>
+  const k = a ? (a.kind || 'cash') : (kind || 'cash');
+  openModal(`<p class="eyebrow">${k === 'expense' ? 'Expense head' : 'Account'}</p><h3>${a ? 'Edit' : 'Add'} ${k === 'expense' ? 'expense head' : 'account'}</h3>
     <form onsubmit="return doAccount('${id || ''}')">
     <label class="f"><span>Name</span><input id="acName" class="inp" value="${esc(a ? a.name : '')}" required maxlength="60"></label>
-    <div class="grid g2"><label class="f"><span>Opening balance ₹ ${a ? '(locked — history safe)' : ''}</span><input id="acOpen" class="inp" inputmode="decimal" value="${a ? (a.opening / 100).toFixed(2) : '0'}" ${a ? 'disabled' : ''}></label>
+    <div class="grid g2"><label class="f"><span>Kind</span><select id="acKind" class="inp" ${a ? 'disabled' : ''} onchange="document.getElementById('acOpen').disabled=this.value==='expense'||!!'${id || ''}'"><option value="cash" ${k === 'cash' ? 'selected' : ''}>Cash account (holds money)</option><option value="expense" ${k === 'expense' ? 'selected' : ''}>Expense head (collects spend)</option></select></label>
+    <label class="f"><span>Opening balance ₹ ${a ? '(locked — history safe)' : ''}</span><input id="acOpen" class="inp" inputmode="decimal" value="${a ? (a.opening / 100).toFixed(2) : '0'}" ${(a || k === 'expense') ? 'disabled' : ''}></label>
     <label class="f"><span>Status</span><select id="acStatus" class="inp"><option ${!a || a.status === 'active' ? 'selected' : ''}>active</option><option ${a && a.status !== 'active' ? 'selected' : ''}>inactive</option></select></label></div>
     <div class="rowbtns end"><button type="button" class="btn-g" onclick="closeModal()">Cancel</button><button class="btn" type="submit">Save</button></div></form>`);
 }
@@ -693,9 +742,10 @@ function doAccount(id) {
     a.name = n.slice(0, 60); a.status = document.getElementById('acStatus').value; a.updatedAt = Date.now();
     audit('account', 'Edited account ' + n, old, a.name + '/' + a.status);
   } else {
-    const o = toPaise(document.getElementById('acOpen').value || 0); if (o === null || o < 0) { toast('Opening must be 0 or more.', 'err'); return false; }
+    const kind = document.getElementById('acKind').value || 'cash';
+    const o = kind === 'expense' ? 0 : (toPaise(document.getElementById('acOpen').value || 0) || 0); if (o === null || o < 0) { toast('Opening must be 0 or more.', 'err'); return false; }
     const t = Date.now();
-    const a = { id: uid(), name: n.slice(0, 60), opening: o, currency: DB.settings.currency, status: document.getElementById('acStatus').value, createdAt: t, updatedAt: t };
+    const a = { id: uid(), name: n.slice(0, 60), opening: o, currency: DB.settings.currency, kind, status: document.getElementById('acStatus').value, createdAt: t, updatedAt: t };
     DB.accounts.push(a);
     if (o) DB.transactions.push(mkTxn({ bizDate: todayKey(), type: 'opening', accountId: a.id, amount: o, note: 'Opening balance' }));
     audit('account', 'Created account ' + a.name + ' opening ' + fmtP(o), '', '');
@@ -929,25 +979,26 @@ function exportRepCSV() {
 }
 function R_monthly(el) {
   const m = UI.rep.month || todayKey().slice(0, 7);
+  if (!UI.rep.acct || !acct(UI.rep.acct)) UI.rep.acct = primaryAcct().id;
   const d0 = m + '-01', d1 = addDays(m + '-01', 32).slice(0, 7) + '-01';
-  const A = primaryAcct();
+  const A = acct(UI.rep.acct);
   const F = { opening: balanceOn(A.id, d0), income: 0, auto: 0, exp: 0 };
   DB.transactions.forEach(t => {
     if (t.accountId !== A.id || t.bizDate < d0 || t.bizDate >= d1 || t.status === 'void') return;
-    if (t.type === 'income') F.income += t.amount;
+    if (t.type === 'income' || (t.exp && t.amount > 0)) F.income += t.amount;
     else if (t.type === 'deduction' || (t.type === 'reversal' && t.ruleId)) F.auto += t.amount;
     else F.exp += t.amount;
   });
   const closing = F.opening + F.income + F.auto + F.exp;
   const byCat = {};
-  DB.transactions.forEach(t => { if (t.accountId === A.id && t.bizDate >= d0 && t.bizDate < d1 && t.status !== 'void' && (t.type === 'expense' || t.type === 'deduction') && t.amount < 0) { const k = catNameOf(t) || ruleName(t.ruleId) || 'Other'; byCat[k] = (byCat[k] || 0) - t.amount; } });
+  DB.transactions.forEach(t => { if (t.accountId === A.id && t.bizDate >= d0 && t.bizDate < d1 && t.status !== 'void' && (t.type === 'expense' || t.type === 'deduction' || (t.type === 'reversal' && !t.ruleId && t.catKind === 'expense'))) { const k = catNameOf(t) || ruleName(t.ruleId) || 'Other'; byCat[k] = (byCat[k] || 0) - t.amount; } });
   const segs = Object.entries(byCat).sort((a, b) => b[1] - a[1]).map(([l, v], i) => ({ l, v, c: PAL[i % PAL.length] }));
   el.innerHTML = `<p class="eyebrow">Reports</p><h2 class="vtitle">${prettyMonth(m)}</h2>
     <div class="seg"><button class="btn-g" onclick="UI.repTab='reports';R_rep()">Reports</button><button class="btn-g on">Monthly summary</button>
     <span style="flex:1"></span><button class="btn-g" onclick="window.print()">Print / PDF</button></div>
     <div class="card pad" style="margin-bottom:1.1rem"><div style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:end">
       <label class="f" style="margin:0"><span>Month</span><input type="month" class="inp" value="${m}" onchange="UI.rep.month=this.value;R_rep()"></label>
-      <label class="f" style="margin:0"><span>Account</span><select class="inp" onchange="UI.dailyAcct=this.value;R_rep()">${DB.accounts.filter(a => a.status === 'active').map(a => `<option value="${a.id}" ${a.id === UI.dailyAcct ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label></div>
+      <label class="f" style="margin:0"><span>Account</span><select class="inp" onchange="UI.rep.acct=this.value;R_rep()">${DB.accounts.filter(a => a.status === 'active').map(a => `<option value="${a.id}" ${a.id === A.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label></div>
       <p class="faint" style="font-size:.8rem">Figures for <b>${esc(A.name)}</b> — opening is the previous month's close, carried automatically.</p></div>
     <div class="grid g2"><div class="card pad">
       <div class="kv"><span>Opening balance</span><b>${fmtP(F.opening)}</b></div>
