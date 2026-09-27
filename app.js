@@ -82,7 +82,10 @@ function migrateV1() {
   try {
     const o = JSON.parse(raw), t = Date.now(), amap = {};
     (o.categories || []).forEach(c => {
-      const a = { id: uid(), name: String(c.name).slice(0, 60), opening: Math.round((+c.openingBalance || 0) * 100), currency: '₹', kind: 'cash', status: 'active', createdAt: t, updatedAt: t };
+      const nm = String(c.name).slice(0, 60);
+      const dup = DB.accounts.find(a => a.name.toLowerCase() === nm.toLowerCase());
+      if (dup) { amap[c.id] = dup.id; return; } // don't create a second account with the same name
+      const a = { id: uid(), name: nm, opening: Math.round((+c.openingBalance || 0) * 100), currency: '₹', kind: 'cash', status: 'active', createdAt: t, updatedAt: t };
       DB.accounts.push(a); amap[c.id] = a.id;
       if (a.opening) DB.transactions.push(mkTxn({ bizDate: dayKey(c.createdAt || t), ts: c.createdAt || t, type: 'opening', accountId: a.id, amount: a.opening, note: 'Opening balance (imported)' }));
     });
@@ -94,6 +97,7 @@ function migrateV1() {
         mirror: !r.deductFromSource, priority: 100, active: !!r.active, start: null, end: null, conds: [], els: null, desc: 'Imported', createdAt: t, updatedAt: t });
     });
     audit('import', 'Migrated data from previous version', '', '');
+    try { localStorage.setItem(LS + '.v1backup', raw); localStorage.removeItem(LS1); } catch (e) {}
     return true;
   } catch (e) { return false; }
 }
@@ -445,7 +449,7 @@ function R_dashboard() {
     <p class="eyebrow">Dashboard · ${prettyDay(today)}</p><h2 class="vtitle">${esc(P.name)} today</h2>
     <p class="vsub">Opening ${fmtP(F.opening)} → Closing <b class="${F.closing < 0 ? 'neg' : ''}">${fmtP(F.closing)}</b>${isLocked(today) ? ' <span class="tag closed">CLOSED</span>' : ''}</p>
     <div class="grid g4">
-      ${[['Opening', F.opening, ''], ['Income', F.income, 'pos'], ['Auto deductions', F.auto, F.auto ? 'neg' : ''], ['Expenses', F.exp + F.tout + F.tin, (F.exp + F.tout + F.tin) ? 'neg' : '']].map(([l, v, c]) => `<div class="card pad"><p class="eyebrow">${l}</p><p class="bignum ${c}">${fmtP(v)}</p></div>`).join('')}
+      ${[['Opening', F.opening, ''], ['Income', F.income, 'pos'], ['Auto deductions', F.auto, F.auto ? 'neg' : ''], ['Expenses out', F.exp + F.tout, (F.exp + F.tout) ? 'neg' : '']].map(([l, v, c]) => `<div class="card pad"><p class="eyebrow">${l}</p><p class="bignum ${c}">${fmtP(v)}</p></div>`).join('')}
     </div>
     <div class="grid g4" style="margin-top:1.1rem">
       ${DB.accounts.filter(a => a.status === 'active').map(a => `<div class="card pad"><p class="eyebrow">${esc(a.name)}</p><p class="bignum ${balanceNow(a.id) < 0 ? 'neg' : ''}" style="font-size:1.6rem">${fmtP(balanceNow(a.id))}</p><button class="link" onclick="go('daily');UI.dailyAcct='${a.id}';R_daily()">open →</button></div>`).join('')}
@@ -948,7 +952,8 @@ function R_rep() {
   const el = document.getElementById('view-reports');
   if (UI.repTab === 'monthly') return R_monthly(el);
   const R = UI.rep, [d0, d1] = rangeFor(R.preset, R.from, R.to);
-  const tx = DB.transactions.filter(t => t.status !== 'void' && t.bizDate >= d0 && t.bizDate <= d1);
+  // mirror legs of expense bookings are internal — exclude so flows aren't doubled (detail lives in Transactions)
+  const tx = DB.transactions.filter(t => t.status !== 'void' && !t.exp && t.bizDate >= d0 && t.bizDate <= d1);
   const groups = {};
   const keyOf = t => R.group === 'day' ? t.bizDate : R.group === 'category' ? (catNameOf(t) || ruleName(t.ruleId) || t.type) : R.group === 'account' ? acctName(t.accountId) : R.group === 'rule' ? (ruleName(t.ruleId) || '(manual)') : t.type;
   tx.forEach(t => { const k = keyOf(t); groups[k] = groups[k] || { in: 0, out: 0, n: 0 }; if (t.amount >= 0) groups[k].in += t.amount; else groups[k].out += t.amount; groups[k].n++; });
@@ -973,9 +978,9 @@ function R_rep() {
 }
 function exportRepCSV() {
   const R = UI.rep, [d0, d1] = rangeFor(R.preset, R.from, R.to);
-  const rows = DB.transactions.filter(t => t.status !== 'void' && t.bizDate >= d0 && t.bizDate <= d1).sort((a, b) => a.ts - b.ts);
+  const rows = DB.transactions.filter(t => t.status !== 'void' && !t.exp && t.bizDate >= d0 && t.bizDate <= d1).sort((a, b) => a.ts - b.ts);
   download(`cashbook-report-${d0}_${d1}.csv`, ['date,txn_id,type,category,rule,account,amount,' + 'note'].concat(rows.map(t => [t.bizDate, t.txn, t.type, csvQ(catNameOf(t)), csvQ(ruleName(t.ruleId)), csvQ(acctName(t.accountId)), (t.amount / 100).toFixed(2), csvQ(t.note)].join(','))).join('\n'));
-  toast('Report CSV downloaded.');
+  toast('Report CSV downloaded (mirror legs excluded — full detail in Transactions export).');
 }
 function R_monthly(el) {
   const m = UI.rep.month || todayKey().slice(0, 7);
