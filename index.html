@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="description" content="DynaLedger — dynamic accounting with categories, relations and daily auto-growth. Works offline; syncs between devices with a 4-digit code." />
+<meta name="theme-color" content="#F4EFE6" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="DynaLedger" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<title>DynaLedger — Dynamic Accounting Manager</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js" defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#F4EFE6; --paper-soft:#FAF7F0; --card:#FDFCF9; --line:#E2D9C8; --line-soft:#ECE4D4;
+    --ink:#23211E; --ink-soft:#5C584F; --ink-faint:#8A857A;
+    --clay:#C15F3C; --clay-deep:#9E4A2D; --clay-soft:#F5E3D8;
+    --sage:#5B7A5A; --sage-soft:#E4EADA; --gold:#A07C2C; --gold-soft:#F3EAD2;
+  }
+  body { background:var(--paper); color:var(--ink); font-family: Inter, system-ui, -apple-system, sans-serif; line-height:1.65; }
+  h1,h2,h3,.serif { font-family: Newsreader, Georgia, 'Times New Roman', serif; letter-spacing:-0.01em; }
+  .page { max-width:72rem; margin:0 auto; padding:2.5rem 1.5rem 4rem; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; box-shadow:0 1px 0 rgba(35,33,30,.04); }
+  .rule { border:none; border-top:1px solid var(--line); margin:1.25rem 0; }
+  .eyebrow { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); font-weight:600; }
+  .muted { color:var(--ink-soft); } .faint { color:var(--ink-faint); }
+  .inp { background:#FFFFFF; border:1px solid var(--line); border-radius:8px; padding:10px 14px; width:100%; color:var(--ink); outline:none; font-size:14px; }
+  .inp:focus { border-color:var(--clay); box-shadow:0 0 0 3px rgba(193,95,60,.12); }
+  .inp::placeholder { color:#B3AC9D; }
+  select.inp option { background:#fff; }
+  .btn-p { background:var(--clay); color:#FDFCF9; border:1px solid var(--clay-deep); border-radius:8px; padding:10px 20px; font-weight:600; font-size:14px; }
+  .btn-p:hover { background:var(--clay-deep); }
+  .btn-g { background:transparent; border:1px solid var(--line); color:var(--ink); border-radius:8px; padding:10px 20px; font-size:14px; font-weight:500; }
+  .btn-g:hover { border-color:var(--ink-faint); background:#fff; }
+  .tab-active { background:var(--ink) !important; color:var(--paper-soft) !important; border-color:var(--ink) !important; }
+  .badge-d { background:var(--sage-soft); color:#3E5A3E; border:1px solid #CBD8BE; }
+  .badge-c { background:var(--gold-soft); color:#7A5E1F; border:1px solid #E3D3A8; }
+  .modal-bg { background:rgba(35,33,30,.45); backdrop-filter: blur(3px); }
+  .soft-row { background:#F7F2E8; border:1px solid var(--line-soft); }
+  ::-webkit-scrollbar { width:8px;height:8px } ::-webkit-scrollbar-thumb { background:#D4C9B4; border-radius:8px }
+  table th { color:var(--ink-faint); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.12em; border-bottom:1px solid var(--line); }
+  table td { border-top:1px solid var(--line-soft); }
+  a, button.underline { color:var(--clay); }
+  * { -webkit-tap-highlight-color: transparent; }
+  button { touch-action: manipulation; }
+  .netdot { display:inline-block; width:9px; height:9px; border-radius:99px; background:#B3AC9D; margin-right:6px; vertical-align:1px; }
+  .netdot.on { background:#5B7A5A; } .netdot.off { background:#9E4A2D; }
+  .synccode { font-family: Newsreader, Georgia, serif; font-size:2.6rem; letter-spacing:.35em; text-indent:.35em; }
+  /* ---- mobile ---- */
+  #mnav { display:none; }
+  @media (max-width: 767px) {
+    .page { padding:1.25rem .9rem 7.5rem; }
+    h1 { font-size:2.1rem !important; }
+    .inp { font-size:16px; padding:12px 14px; } /* stops iOS auto-zoom */
+    .btn-p, .btn-g { min-height:44px; padding:12px 16px; }
+    #topTabs { display:none; }
+    #mnav { display:flex; position:fixed; left:0; right:0; bottom:0; z-index:40;
+      background:rgba(253,252,249,.96); backdrop-filter: blur(8px);
+      border-top:1px solid var(--line); padding:.5rem .4rem calc(.5rem + env(safe-area-inset-bottom)); }
+    #mnav button { flex:1; border:none; background:none; font-size:11px; color:var(--ink-soft);
+      display:flex; flex-direction:column; align-items:center; gap:2px; padding:.45rem 0; border-radius:10px; min-height:52px; }
+    #mnav button .ico { font-size:19px; line-height:1; }
+    #mnav button.mactive { color:var(--ink); background:var(--clay-soft); font-weight:600; }
+    #mnav button.mfab { color:#FDFCF9; background:var(--clay); font-weight:700; margin:-1.4rem .2rem 0; border-radius:14px; box-shadow:0 6px 16px rgba(158,74,45,.35); }
+    .sheet-modal { align-items:flex-end !important; padding:0 !important; }
+    .sheet-modal .card { border-radius:18px 18px 0 0; max-height:92dvh; overflow-y:auto; padding-bottom:calc(1.5rem + env(safe-area-inset-bottom)) !important; }
+    .card.p-6 { padding:1.1rem !important; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="flex flex-wrap gap-4 items-end justify-between mb-2">
+    <div class="max-w-xl">
+      <p class="eyebrow mb-2">A quiet place for your money</p>
+      <h1 class="text-4xl md:text-5xl font-semibold">DynaLedger</h1>
+      <p class="muted mt-3 text-[15px]">Dynamic accounting — categories, debit &amp; credit, relations, and gentle auto-growth. Set it up once; it takes care of the rest.</p>
+    </div>
+    <div class="flex gap-2 flex-wrap items-center">
+      <span class="text-xs faint" style="border:1px solid var(--line);border-radius:99px;padding:8px 14px;background:var(--card)"><span id="netDot" class="netdot"></span><span id="netTxt">checking…</span></span>
+      <button onclick="openModal('txnModal')" class="btn-p">+ Transaction</button>
+      <button onclick="openModal('catModal')" class="btn-g">+ Category</button>
+      <button onclick="openModal('relModal')" class="btn-g">+ Relation</button>
+      <button onclick="switchTab('settings');setTimeout(()=>document.getElementById('syncCard').scrollIntoView({behavior:'smooth'}),80)" class="btn-g">⇄ Sync</button>
+      <button onclick="exportJSON()" class="btn-g">Export</button>
+      <label class="btn-g cursor-pointer">Import<input type="file" id="importFile" accept=".json" class="hidden" onchange="importJSON(event)"></label>
+      <button onclick="seedDemo()" class="btn-g">Demo data</button>
+      <button onclick="wipeAll()" class="btn-g" style="color:#9E4A2D">Reset</button>
+    </div>
+  </header>
+  <hr class="rule">
+
+  <!-- TABS -->
+  <div id="topTabs" class="flex gap-2 mb-8 flex-wrap">
+    <button id="tab-dashboard" onclick="switchTab('dashboard')" class="btn-g tab-active">Dashboard</button>
+    <button id="tab-categories" onclick="switchTab('categories')" class="btn-g">Categories</button>
+    <button id="tab-relations" onclick="switchTab('relations')" class="btn-g">Relations</button>
+    <button id="tab-ledger" onclick="switchTab('ledger')" class="btn-g">Ledger</button>
+    <button id="tab-settings" onclick="switchTab('settings')" class="btn-g">Auto-update &amp; Settings</button>
+  </div>
+
+  <!-- MOBILE BOTTOM NAV -->
+  <nav id="mnav" aria-label="Primary">
+    <button id="m-dashboard" onclick="switchTab('dashboard')" class="mactive"><span class="ico">○</span>Home</button>
+    <button id="m-categories" onclick="switchTab('categories')"><span class="ico">▤</span>Cats</button>
+    <button onclick="openModal('txnModal')" class="mfab"><span class="ico">+</span>Add</button>
+    <button id="m-relations" onclick="switchTab('relations')"><span class="ico">⇄</span>Flows</button>
+    <button id="m-ledger" onclick="switchTab('ledger')"><span class="ico">≡</span>Ledger</button>
+  </nav>
+
+  <!-- DASHBOARD -->
+  <section id="view-dashboard">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-5 mb-6">
+      <div class="card p-6"><p class="eyebrow">Net total</p><h2 id="kpiNet" class="text-3xl font-semibold mt-2">₹0</h2><p id="kpiCount" class="text-xs faint mt-2"></p></div>
+      <div class="card p-6"><p class="eyebrow">Debit nature · assets</p><h2 id="kpiDebit" class="text-3xl font-semibold mt-2" style="color:#3E5A3E">₹0</h2></div>
+      <div class="card p-6"><p class="eyebrow">Credit nature · liabilities</p><h2 id="kpiCredit" class="text-3xl font-semibold mt-2" style="color:#7A5E1F">₹0</h2></div>
+      <div class="card p-6"><p class="eyebrow">Today in / out</p><h2 class="text-xl font-semibold mt-2"><span id="kpiIn" style="color:#3E5A3E">+0</span> <span class="faint">/</span> <span id="kpiOut" style="color:#9E4A2D">-0</span></h2><p id="kpiAlerts" class="text-xs mt-2" style="color:#9E4A2D"></p></div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-5 mb-6">
+      <div class="card p-6"><p class="eyebrow mb-1">Overview</p><h3 class="text-2xl font-medium mb-4">Balance by category</h3><canvas id="chBar" height="220"></canvas></div>
+      <div class="card p-6"><p class="eyebrow mb-1">Composition</p><h3 class="text-2xl font-medium mb-4">Debit vs. credit nature</h3><canvas id="chPie" height="220"></canvas></div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-5">
+      <div class="card p-6"><p class="eyebrow mb-1">Attention</p><h3 class="text-2xl font-medium mb-4">Minimum-balance notes</h3><div id="alertsBox" class="space-y-3 text-sm"></div></div>
+      <div class="card p-6"><p class="eyebrow mb-1">Journal</p><h3 class="text-2xl font-medium mb-4">Recent entries</h3><div id="recentBox" class="space-y-3 text-sm max-h-80 overflow-auto"></div></div>
+    </div>
+  </section>
+
+  <!-- CATEGORIES -->
+  <section id="view-categories" class="hidden">
+    <div class="card p-6 mb-5 flex flex-wrap gap-3 items-center">
+      <input id="catSearch" class="inp !w-64" placeholder="Search categories..." oninput="render()">
+      <select id="catFilter" class="inp !w-48" onchange="render()"><option value="">All natures</option><option value="debit">Debit</option><option value="credit">Credit</option></select>
+      <span class="text-xs faint ml-auto">Independent — no active relations in or out. Otherwise, linked paths are shown.</span>
+    </div>
+    <div id="catGrid" class="grid md:grid-cols-3 gap-5"></div>
+  </section>
+
+  <!-- RELATIONS -->
+  <section id="view-relations" class="hidden">
+    <div class="card p-6 mb-5 text-sm muted">
+      <p class="eyebrow mb-2">How relations work</p>
+      <p class="text-[15px]">When money is <b>added (credited)</b> to a <b>source</b> category, each active rule quietly routes a share to a <b>target</b>.
+      Choose <b>percent</b> or a <b>fixed amount</b>.
+      <b>Deduct on</b> moves money (the source keeps the remainder).
+      <b>Deduct off</b> mirrors it (the source keeps everything, the target receives a copy).
+      A category with no active rules is <b>independent</b>.</p>
+    </div>
+    <div id="relList" class="space-y-3"></div>
+  </section>
+
+  <!-- LEDGER -->
+  <section id="view-ledger" class="hidden">
+    <div class="card p-6 mb-5 flex flex-wrap gap-3">
+      <select id="ledCat" class="inp !w-56" onchange="renderLedger()"><option value="">All categories</option></select>
+      <select id="ledType" class="inp !w-48" onchange="renderLedger()"><option value="">All types</option><option>credit</option><option>debit</option><option>transfer</option><option>relation</option><option>auto</option><option>opening</option></select>
+      <button onclick="exportCSV()" class="btn-g">Export CSV</button>
+    </div>
+    <div class="card p-6 overflow-auto"><table class="w-full text-sm"><thead><tr><th class="text-left p-3">Date</th><th class="text-left p-3">Category</th><th class="text-left p-3">Type</th><th class="text-right p-3">Amount</th><th class="text-left p-3">Note</th><th class="text-left p-3">Action</th></tr></thead><tbody id="ledBody"></tbody></table></div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="view-settings" class="hidden">
+    <div class="card p-6 mb-5">
+      <p class="eyebrow mb-1">Daily accrual</p>
+      <h3 class="text-2xl font-medium mb-2">Auto-update, per category</h3>
+      <p class="text-sm muted mb-4">Optional. For example, Savings +₹50 a day, Petty-cash −₹20 a day. Applied automatically from the days elapsed since the last run — on open, and every minute after.</p>
+      <div id="autoList" class="space-y-3"></div>
+      <button onclick="runAutoUpdate(true)" class="btn-p mt-4">Run auto-update now</button>
+    </div>
+    <div class="card p-6 mb-5" id="syncCard">
+      <p class="eyebrow mb-1">Devices</p>
+      <h3 class="text-2xl font-medium mb-2">Sync with a 4-digit code</h3>
+      <p class="text-sm muted mb-1">Open DynaLedger on both devices with <b>internet on</b> (sync needs internet; everything else works offline). One device shares, the other joins — both must be on this page at the same time.</p>
+      <p class="text-xs faint mb-4">Codes live for 5 minutes and work across laptop ↔ mobile. Your data travels directly between the two devices.</p>
+      <div class="grid md:grid-cols-2 gap-4">
+        <div class="soft-row rounded-lg p-4">
+          <p class="eyebrow mb-2">This device shares</p>
+          <button onclick="hostSync()" class="btn-p w-full" id="hostBtn">Show my 4-digit code</button>
+          <div id="hostBox" class="hidden text-center mt-3">
+            <p class="text-xs faint">Enter this on your other device:</p>
+            <p class="synccode" id="hostCode">––––</p>
+            <p class="text-xs faint" id="hostStatus">Waiting for the other device…</p>
+            <button onclick="stopSync()" class="btn-g !py-1.5 !px-3 text-xs mt-2">Stop sharing</button>
+          </div>
+        </div>
+        <div class="soft-row rounded-lg p-4">
+          <p class="eyebrow mb-2">This device joins</p>
+          <div class="flex gap-2">
+            <input id="joinCode" inputmode="numeric" maxlength="4" pattern="[0-9]*" placeholder="4-digit code" class="inp text-center" style="font-size:1.4rem;letter-spacing:.3em">
+            <button onclick="joinSync()" class="btn-p" id="joinBtn">Join</button>
+          </div>
+          <p class="text-xs faint mt-2" id="joinStatus">The joining device receives the sharing device's data (merged by newest change; a backup is kept automatically).</p>
+        </div>
+      </div>
+    </div>
+    <div class="card p-6">
+      <p class="eyebrow mb-2">Preferences</p>
+      <h3 class="text-2xl font-medium mb-3">Currency</h3>
+      <div class="flex gap-2"><input id="currencyInp" class="inp !w-32" value="₹"><button onclick="saveCurrency()" class="btn-g">Save</button></div>
+    </div>
+  </section>
+</div>
+
+<!-- CATEGORY MODAL -->
+<div id="catModal" class="hidden fixed inset-0 modal-bg sheet-modal flex items-center justify-center p-4 z-50">
+  <div class="card p-8 w-full max-w-md">
+    <p class="eyebrow mb-1">Ledger</p>
+    <h3 class="text-3xl font-medium mb-5" id="catModalTitle">New category</h3>
+    <input type="hidden" id="cId">
+    <label class="eyebrow">Name</label><input id="cName" class="inp mb-3 mt-1" placeholder="e.g. Salary, Savings, Rent">
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <div><label class="eyebrow">Nature</label><select id="cNature" class="inp mt-1"><option value="debit">Debit (asset/expense)</option><option value="credit">Credit (liability/income)</option></select></div>
+      <div><label class="eyebrow">Color</label><input id="cColor" type="color" value="#C15F3C" class="inp !p-1 h-11 mt-1"></div>
+    </div>
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <div><label class="eyebrow">Opening balance</label><input id="cOpen" type="number" value="0" class="inp mt-1"></div>
+      <div><label class="eyebrow">Minimum balance</label><input id="cMin" type="number" value="0" class="inp mt-1"></div>
+    </div>
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <div><label class="eyebrow">Auto ₹ / day</label><input id="cAuto" type="number" value="0" class="inp mt-1"></div>
+      <div class="flex items-end pb-2 gap-2"><input id="cAutoOn" type="checkbox" class="w-4 h-4 accent-[#C15F3C]"><label class="text-xs muted">Enable auto-update</label></div>
+    </div>
+    <label class="eyebrow">Note</label><input id="cNote" class="inp mb-4 mt-1" placeholder="optional">
+    <div class="flex gap-2 justify-end"><button onclick="closeModal('catModal')" class="btn-g">Cancel</button><button onclick="saveCategory()" class="btn-p">Save</button></div>
+  </div>
+</div>
+
+<!-- TRANSACTION MODAL -->
+<div id="txnModal" class="hidden fixed inset-0 modal-bg sheet-modal flex items-center justify-center p-4 z-50">
+  <div class="card p-8 w-full max-w-md">
+    <p class="eyebrow mb-1">Journal entry</p>
+    <h3 class="text-3xl font-medium mb-5">Add transaction</h3>
+    <p class="text-sm muted mb-4">Relations fire automatically when you add (credit) to a linked source.</p>
+    <label class="eyebrow">Category</label><select id="tCat" class="inp mb-3 mt-1"></select>
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <div><label class="eyebrow">Direction</label><select id="tDir" class="inp mt-1"><option value="credit">Credit / Add (+)</option><option value="debit">Debit / Remove (−)</option></select></div>
+      <div><label class="eyebrow">Amount</label><input id="tAmt" type="number" min="0" step="0.01" class="inp mt-1" placeholder="0.00"></div>
+    </div>
+    <label class="eyebrow">Note</label><input id="tNote" class="inp mb-3 mt-1" placeholder="e.g. August salary">
+    <div id="relPreview" class="text-xs soft-row rounded-lg p-3 mb-4 hidden"></div>
+    <div class="flex gap-2 justify-end"><button onclick="closeModal('txnModal')" class="btn-g">Cancel</button><button onclick="saveTransaction()" class="btn-p">Save</button></div>
+    <hr class="rule">
+    <h4 class="text-lg font-medium mb-2">Manual transfer</h4>
+    <p class="text-xs faint mb-3">Direct, bypasses the relation rules.</p>
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <select id="xFrom" class="inp"></select><select id="xTo" class="inp"></select>
+    </div>
+    <div class="flex gap-2"><input id="xAmt" type="number" class="inp" placeholder="Amount"><button onclick="saveTransfer()" class="btn-g">Transfer</button></div>
+  </div>
+</div>
+
+<!-- RELATION MODAL -->
+<div id="relModal" class="hidden fixed inset-0 modal-bg sheet-modal flex items-center justify-center p-4 z-50">
+  <div class="card p-8 w-full max-w-md">
+    <p class="eyebrow mb-1">Connections</p>
+    <h3 class="text-3xl font-medium mb-5">New relation rule</h3>
+    <input type="hidden" id="rId">
+    <label class="eyebrow">When money is added to (source)</label><select id="rSource" class="inp mb-3 mt-1"></select>
+    <label class="eyebrow">Quietly route to (target)</label><select id="rTarget" class="inp mb-3 mt-1"></select>
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <div><label class="eyebrow">Mode</label><select id="rMode" class="inp mt-1"><option value="percent">Percent %</option><option value="fixed">Fixed ₹</option></select></div>
+      <div><label class="eyebrow">Value</label><input id="rValue" type="number" value="10" class="inp mt-1"></div>
+    </div>
+    <div class="flex items-center gap-2 mb-4"><input id="rDeduct" type="checkbox" checked class="w-4 h-4 accent-[#C15F3C]"><label class="text-xs muted">Deduct from source (on = move, off = mirror)</label></div>
+    <div class="flex gap-2 justify-end"><button onclick="closeModal('relModal')" class="btn-g">Cancel</button><button onclick="saveRelation()" class="btn-p">Save rule</button></div>
+  </div>
+</div>
+
+<script>
+const LS='dynaLedgerV1';
+let DB={categories:[],relations:[],transactions:[],currency:'₹'};
+let charts={};
+const uid=()=>Math.random().toString(36).slice(2,9);
+const fmt=n=>(DB.currency||'₹')+Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:2});
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---- persistence ---- */
+function load(){ try{const r=localStorage.getItem(LS); if(r) DB={currency:'₹',categories:[],relations:[],transactions:[],...JSON.parse(r)};}catch(e){} }
+function save(){ DB.savedAt=Date.now(); localStorage.setItem(LS,JSON.stringify(DB)); }
+
+/* ---- calendar-day helpers (auto-update accuracy) ---- */
+function dayKey(ts){ const d=new Date(ts); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function daysBetween(aKey,bKey){
+  const pa=aKey.split('-').map(Number), pb=bKey.split('-').map(Number);
+  const a=Date.UTC(pa[0],pa[1]-1,pa[2]), b=Date.UTC(pb[0],pb[1]-1,pb[2]);
+  return Math.round((b-a)/86400000);
+}
+function pendingDays(c){
+  if(!c.autoEnabled||!(+c.autoDailyAmount)) return 0;
+  const last=c.lastAutoDate||(c.lastAutoApplied?dayKey(c.lastAutoApplied):(c.createdAt?dayKey(c.createdAt):dayKey(Date.now())));
+  return Math.max(0, daysBetween(last, dayKey(Date.now())));
+}
+/* one-time migration: timestamp -> calendar date, keeps accrual anchored at the added date */
+function migrateAutoDates(){
+  let touched=false;
+  DB.categories.forEach(c=>{
+    if(!c.lastAutoDate){
+      c.lastAutoDate=c.lastAutoApplied?dayKey(c.lastAutoApplied):(c.createdAt?dayKey(c.createdAt):dayKey(Date.now()));
+      touched=true;
+    }
+    if(c.updatedAt===undefined){ c.updatedAt=c.createdAt||0; touched=true; }
+  });
+  DB.relations.forEach(r=>{ if(r.updatedAt===undefined){ r.updatedAt=0; touched=true; } });
+  if(touched) save();
+}
+
+/* ---- tabs/modals ---- */
+function switchTab(t){ ['dashboard','categories','relations','ledger','settings'].forEach(x=>{document.getElementById('view-'+x).classList.add('hidden');document.getElementById('tab-'+x).classList.remove('tab-active'); const m=document.getElementById('m-'+x); if(m)m.classList.remove('mactive');}); document.getElementById('view-'+t).classList.remove('hidden'); document.getElementById('tab-'+t).classList.add('tab-active'); const mt=document.getElementById('m-'+t); if(mt)mt.classList.add('mactive'); if(t==='ledger')renderLedger(); render(); window.scrollTo({top:0,behavior:'smooth'}); }
+function openModal(id){ document.getElementById(id).classList.remove('hidden'); refreshSelects(); if(id==='txnModal')previewRelations(); }
+function closeModal(id){ document.getElementById(id).classList.add('hidden'); }
+
+/* ---- categories ---- */
+function saveCategory(){
+  const id=document.getElementById('cId').value||uid();
+  const name=document.getElementById('cName').value.trim(); if(!name) return alert('Name required');
+  const ex=DB.categories.find(c=>c.id===id);
+  const data={ id, name, nature:document.getElementById('cNature').value, color:document.getElementById('cColor').value,
+    openingBalance:+document.getElementById('cOpen').value||0, minBalance:+document.getElementById('cMin').value||0,
+    autoDailyAmount:+document.getElementById('cAuto').value||0, autoEnabled:document.getElementById('cAutoOn').checked,
+    note:document.getElementById('cNote').value, updatedAt:Date.now() };
+  if(ex){ data.balance=ex.balance; data.createdAt=ex.createdAt; data.lastAutoApplied=ex.lastAutoApplied; data.lastAutoDate=ex.lastAutoDate||(ex.lastAutoApplied?dayKey(ex.lastAutoApplied):dayKey(ex.createdAt||Date.now())); Object.assign(ex,data); }
+  else{ data.balance=data.openingBalance; data.createdAt=Date.now(); data.lastAutoApplied=Date.now(); data.lastAutoDate=dayKey(Date.now());
+    DB.categories.push(data);
+    DB.transactions.push({id:uid(),ts:Date.now(),type:'opening',categoryId:id,amount:data.openingBalance,note:'Opening balance'}); }
+  save(); closeModal('catModal'); clearCatForm(); render();
+}
+function clearCatForm(){ ['cId','cName','cOpen','cMin','cAuto','cNote'].forEach(i=>document.getElementById(i).value=i==='cId'?'':''); document.getElementById('cAutoOn').checked=false; document.getElementById('catModalTitle').innerText='New category'; }
+function editCategory(id){ const c=DB.categories.find(x=>x.id===id); if(!c)return; document.getElementById('cId').value=c.id; document.getElementById('cName').value=c.name; document.getElementById('cNature').value=c.nature; document.getElementById('cColor').value=c.color; document.getElementById('cOpen').value=c.openingBalance; document.getElementById('cMin').value=c.minBalance; document.getElementById('cAuto').value=c.autoDailyAmount; document.getElementById('cAutoOn').checked=c.autoEnabled; document.getElementById('cNote').value=c.note||''; document.getElementById('catModalTitle').innerText='Edit category'; openModal('catModal'); }
+function delCategory(id){ if(!confirm('Delete category + its relations? Transactions kept.'))return; DB.categories=DB.categories.filter(c=>c.id!==id); DB.relations=DB.relations.filter(r=>r.sourceId!==id&&r.targetId!==id); save(); render(); }
+function catName(id){ return (DB.categories.find(c=>c.id===id)||{}).name||'—'; }
+
+/* ---- relations ---- */
+function saveRelation(){
+  const s=document.getElementById('rSource').value, t=document.getElementById('rTarget').value;
+  if(!s||!t) return alert('Pick source + target'); if(s===t) return alert('Source and target must differ');
+  const id=document.getElementById('rId').value||uid();
+  const data={id,sourceId:s,targetId:t,mode:document.getElementById('rMode').value,value:+document.getElementById('rValue').value||0,deductFromSource:document.getElementById('rDeduct').checked,active:true,updatedAt:Date.now()};
+  const ex=DB.relations.find(r=>r.id===id); if(ex)Object.assign(ex,data); else DB.relations.push(data);
+  document.getElementById('rId').value=''; save(); closeModal('relModal'); render();
+}
+function editRelation(id){ const r=DB.relations.find(x=>x.id===id); if(!r)return; document.getElementById('rId').value=r.id; refreshSelects(); document.getElementById('rSource').value=r.sourceId; document.getElementById('rTarget').value=r.targetId; document.getElementById('rMode').value=r.mode; document.getElementById('rValue').value=r.value; document.getElementById('rDeduct').checked=r.deductFromSource; openModal('relModal'); }
+function toggleRelation(id){ const r=DB.relations.find(x=>x.id===id); r.active=!r.active; r.updatedAt=Date.now(); save(); render(); }
+function delRelation(id){ if(!confirm('Delete rule?'))return; DB.relations=DB.relations.filter(r=>r.id!==id); save(); render(); }
+function relationsOf(catId){ return DB.relations.filter(r=>r.active&&(r.sourceId===catId||r.targetId===catId)); }
+
+/* ---- transactions with relation engine ---- */
+function saveTransaction(){
+  const catId=document.getElementById('tCat').value, dir=document.getElementById('tDir').value, amt=+document.getElementById('tAmt').value;
+  const note=document.getElementById('tNote').value||'';
+  if(!catId||!(amt>0)) return alert('Pick category + amount > 0');
+  const cat=DB.categories.find(c=>c.id===catId); if(!cat)return;
+  if(dir==='credit'){
+    cat.balance+=amt;
+    DB.transactions.push({id:uid(),ts:Date.now(),type:'credit',categoryId:catId,amount:amt,note});
+    // fire relations
+    const rules=DB.relations.filter(r=>r.active&&r.sourceId===catId);
+    let totalDeduct=0;
+    rules.forEach(r=>{
+      const tgt=DB.categories.find(c=>c.id===r.targetId); if(!tgt)return;
+      let share=r.mode==='percent'?amt*r.value/100:r.value; share=Math.max(0,share);
+      if(r.deductFromSource){ share=Math.min(share,cat.balance); cat.balance-=share; totalDeduct+=share; }
+      tgt.balance+=share;
+      DB.transactions.push({id:uid(),ts:Date.now(),type:'relation',categoryId:tgt.id,amount:share,note:`Auto from ${cat.name} (${r.mode==='percent'?r.value+'%':'fixed '+fmt(r.value)})${r.deductFromSource?' · moved':' · mirrored'}`,relatedCategoryId:catId});
+    });
+    if(totalDeduct>0) DB.transactions.push({id:uid(),ts:Date.now(),type:'transfer',categoryId:catId,amount:-totalDeduct,note:`Auto-routed to ${rules.filter(r=>r.deductFromSource).length} categorie(s)`});
+  } else {
+    cat.balance-=amt;
+    DB.transactions.push({id:uid(),ts:Date.now(),type:'debit',categoryId:catId,amount:-amt,note});
+  }
+  save(); closeModal('txnModal'); document.getElementById('tAmt').value=''; render();
+}
+function saveTransfer(){
+  const f=document.getElementById('xFrom').value,t=document.getElementById('xTo').value,a=+document.getElementById('xAmt').value;
+  if(!f||!t||f===t||!(a>0)) return alert('Pick different from/to + amount');
+  const A=DB.categories.find(c=>c.id===f),B=DB.categories.find(c=>c.id===t);
+  A.balance-=a; B.balance+=a;
+  DB.transactions.push({id:uid(),ts:Date.now(),type:'transfer',categoryId:f,amount:-a,note:`Transfer → ${B.name}`,relatedCategoryId:t});
+  DB.transactions.push({id:uid(),ts:Date.now(),type:'transfer',categoryId:t,amount:a,note:`Transfer ← ${A.name}`,relatedCategoryId:f});
+  save(); closeModal('txnModal'); render();
+}
+function delTxn(id){ const t=DB.transactions.find(x=>x.id===id); if(!t)return; if(!confirm('Delete entry? This reverses its effect on balance.'))return;
+  const c=DB.categories.find(x=>x.id===t.categoryId); if(c) c.balance-=t.amount;
+  DB.transactions=DB.transactions.filter(x=>x.id!==id); save(); render(); }
+function previewRelations(){
+  const box=document.getElementById('relPreview'), catId=document.getElementById('tCat').value, dir=document.getElementById('tDir').value, amt=+document.getElementById('tAmt').value||0;
+  const rules=DB.relations.filter(r=>r.active&&r.sourceId===catId);
+  if(dir!=='credit'||!rules.length||!(amt>0)){box.classList.add('hidden');return;}
+  box.classList.remove('hidden');
+  box.innerHTML='<b>Will auto-route:</b><br>'+rules.map(r=>{const s=r.mode==='percent'?(amt*r.value/100):r.value;return `→ ${esc(catName(r.targetId))}: <b>${fmt(s)}</b> ${r.deductFromSource?'(moved out of source)':'(mirrored copy)'}`;}).join('<br>');
+}
+['tCat','tDir','tAmt'].forEach(id=>document.addEventListener('input',e=>{if(e.target&&e.target.id===id)previewRelations();}));
+
+/* ---- auto update (calendar-day accurate) ----
+   Accrues whole calendar days between the category's added/last-run date
+   and TODAY. Reopening after N days applies exactly N × daily amount.
+   Clock moved backwards can never double-apply: lastAutoDate only moves forward. */
+function accrueOne(c, todayK, now, log){
+  const days=pendingDays(c);
+  if(days<1) return 0;
+  const delta=(+c.autoDailyAmount)*days;
+  c.balance=(+c.balance||0)+delta;
+  c.lastAutoDate=todayK; c.lastAutoApplied=now; c.updatedAt=now;
+  if(log!==false) DB.transactions.push({id:uid(),ts:now,type:'auto',categoryId:c.id,amount:delta,note:`Auto ${fmt(c.autoDailyAmount)}/day × ${days} day${days>1?'s':''}`});
+  return days;
+}
+function runAutoUpdate(manual){
+  const now=Date.now(), todayK=dayKey(now);
+  let applied=0, daysTotal=0;
+  DB.categories.forEach(c=>{
+    if(!c.autoEnabled||!(+c.autoDailyAmount)) return;
+    if(!c.lastAutoDate) c.lastAutoDate=c.lastAutoApplied?dayKey(c.lastAutoApplied):(c.createdAt?dayKey(c.createdAt):todayK);
+    const d=accrueOne(c,todayK,now);
+    if(d>0){ applied++; daysTotal+=d; }
+  });
+  save(); render();
+  if(manual) alert(applied?`Auto-update applied: ${applied} categor${applied>1?'ies':'y'} caught up by ${daysTotal} day${daysTotal>1?'s':''} in total.`:'Everything is already up to date as of today.');
+}
+
+/* ---- dashboard/render ---- */
+function totals(){
+  let d=0,c=0; DB.categories.forEach(x=>{if(x.nature==='debit')d+=+x.balance||0;else c+=+x.balance||0;});
+  return {debit:d,credit:c,net:d-c,all:d+c};
+}
+function render(){
+  const q=(document.getElementById('catSearch').value||'').toLowerCase(), f=document.getElementById('catFilter').value;
+  const t=totals();
+  document.getElementById('kpiNet').innerText=fmt(DB.categories.reduce((s,x)=>s+(+x.balance||0),0));
+  document.getElementById('kpiDebit').innerText=fmt(t.debit);
+  document.getElementById('kpiCredit').innerText=fmt(t.credit);
+  document.getElementById('kpiCount').innerText=`${DB.categories.length} categories • ${DB.relations.filter(r=>r.active).length} active rules`;
+  const today=new Date().toDateString(); let inn=0,out=0;
+  DB.transactions.forEach(x=>{ if(new Date(x.ts).toDateString()===today){ if(x.amount>0)inn+=x.amount; else out+=x.amount; }});
+  document.getElementById('kpiIn').innerText='+'+fmt(inn).replace(DB.currency,'');
+  document.getElementById('kpiOut').innerText='-'+fmt(Math.abs(out)).replace(DB.currency,'');
+  const low=DB.categories.filter(c=>(+c.balance||0)<(+c.minBalance||0));
+  document.getElementById('kpiAlerts').innerText=low.length?`⚠️ ${low.length} below minimum`:'All above minimum ✓';
+  document.getElementById('alertsBox').innerHTML=low.length?low.map(c=>`<div class="soft-row rounded-lg p-3">Below minimum — <b>${esc(c.name)}</b> sits at ${fmt(c.balance)} <span class="faint">(floor ${fmt(c.minBalance)})</span> <button class="underline ml-2" onclick="editCategory('${c.id}')">Adjust</button></div>`).join(''):'<p class="faint text-sm">All quiet. Set a minimum balance per category to receive a gentle note here.</p>';
+  const rec=[...DB.transactions].sort((a,b)=>b.ts-a.ts).slice(0,12);
+  document.getElementById('recentBox').innerHTML=rec.length?rec.map(txRow).join(''):'<p class="faint">No entries yet. Your journal will appear here.</p>';
+
+  // categories grid
+  const grid=document.getElementById('catGrid');
+  grid.innerHTML=DB.categories.filter(c=>(!q||c.name.toLowerCase().includes(q))&&(!f||c.nature===f)).map(c=>{
+    const rels=relationsOf(c.id);
+    const indep=rels.length===0;
+    const below=(+c.balance||0)<(+c.minBalance||0);
+    return `<div class="card p-6" style="border-top:3px solid ${c.color}">
+      <div class="flex justify-between items-start gap-2"><h3 class="text-xl font-medium">${esc(c.name)}</h3>
+      <span class="text-[11px] px-2 py-1 rounded-full ${c.nature==='debit'?'badge-d':'badge-c'}">${c.nature.toUpperCase()}</span></div>
+      <p class="text-3xl font-semibold my-2">${fmt(c.balance)}</p>
+      <p class="text-xs faint">floor ${fmt(c.minBalance)} ${below?'· below floor':''} &nbsp;·&nbsp; auto ${c.autoEnabled?(fmt(c.autoDailyAmount)+'/day'):'off'} &nbsp;·&nbsp; ${indep?'<span style="color:#5B7A5A">Independent</span>':`<span style="color:#9E4A2D">${rels.length} link(s)</span>`}</p>
+      ${rels.length?'<div class="text-[12px] mt-3 pt-3 space-y-1 muted" style="border-top:1px solid var(--line-soft)">'+rels.map(r=>`<div>— ${r.sourceId===c.id?`to ${esc(catName(r.targetId))} · <b>${r.mode==='percent'?r.value+'%':fmt(r.value)}</b> ${r.deductFromSource?'(moved)':'(mirrored)'}`:`from ${esc(catName(r.sourceId))}`}</div>`).join('')+'</div>':''}
+      ${c.note?`<p class="text-xs faint mt-2 italic">${esc(c.note)}</p>`:''}
+      <div class="flex gap-2 mt-4 pt-4" style="border-top:1px solid var(--line-soft)"><button onclick="quickTxn('${c.id}','credit')" class="btn-p !py-1.5 !px-3 text-sm">+ Add</button><button onclick="quickTxn('${c.id}','debit')" class="btn-g !py-1.5 !px-3 text-sm">− Out</button><button onclick="editCategory('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm">Edit</button><button onclick="delCategory('${c.id}')" class="btn-g !py-1.5 !px-3 text-sm" style="color:#9E4A2D">Delete</button></div>
+    </div>`;}).join('')||'<p class="faint">No categories yet. Begin with + Category.</p>';
+
+  // relations
+  document.getElementById('relList').innerHTML=DB.relations.map(r=>`<div class="card p-5 flex flex-wrap items-center gap-3 text-sm ${r.active?'':'opacity-50'}">
+    <span class="text-lg font-medium">${esc(catName(r.sourceId))}</span><span class="faint">→</span><span class="text-lg font-medium">${esc(catName(r.targetId))}</span>
+    <span class="soft-row px-2 py-1 rounded">${r.mode==='percent'?r.value+'%':fmt(r.value)}</span>
+    <span class="text-xs faint">${r.deductFromSource?'moved · deducts source':'mirrored · source kept whole'}</span>
+    <span class="ml-auto flex gap-2"><button onclick="toggleRelation('${r.id}')" class="btn-g !py-1 !px-3 text-xs">${r.active?'Pause':'Resume'}</button><button onclick="editRelation('${r.id}')" class="btn-g !py-1 !px-3 text-xs">Edit</button><button onclick="delRelation('${r.id}')" class="btn-g !py-1 !px-3 text-xs" style="color:#9E4A2D">Delete</button></span></div>`).join('')||'<p class="faint">No relations — every category stands independent.</p>';
+
+  // auto list
+  document.getElementById('autoList').innerHTML=DB.categories.map(c=>{
+    const pd=pendingDays(c);
+    const due=pd>0?` · <b style="color:#9E4A2D">${pd} day${pd>1?'s':''} due (${fmt((+c.autoDailyAmount)*pd)})</b>`:' · up to date';
+    return `<div class="flex flex-wrap gap-3 items-center text-sm soft-row rounded-lg p-3">
+    <b class="w-40 font-medium">${esc(c.name)}</b><input type="number" value="${c.autoDailyAmount||0}" onchange="setAuto('${c.id}',this.value)" class="inp !w-32"><span class="text-xs faint">per day</span>
+    <label class="text-xs muted flex gap-2 items-center"><input type="checkbox" ${c.autoEnabled?'checked':''} onchange="toggleAuto('${c.id}')" class="accent-[#C15F3C]"> enabled</label>
+    <span class="text-[11px] faint ml-auto">since ${c.lastAutoDate||'—'}${c.autoEnabled?due:''}</span></div>`;}).join('');
+
+  refreshSelects(); drawCharts();
+}
+function txRow(t){ const col=t.amount>=0?'#3E5A3E':'#9E4A2D';
+  return `<div class="flex justify-between gap-3 soft-row rounded-lg p-3"><div><b class="font-medium">${esc(catName(t.categoryId))}</b> <span class="text-[11px] px-2 py-0.5 rounded-full" style="border:1px solid var(--line);color:var(--ink-soft)">${t.type}</span><br><span class="text-xs faint">${new Date(t.ts).toLocaleString()} · ${esc(t.note||'')}</span></div><div class="text-right"><b style="color:${col}">${t.amount>=0?'+':''}${fmt(t.amount)}</b><br><button onclick="delTxn('${t.id}')" class="text-[11px] faint underline">reverse</button></div></div>`; }
+function quickTxn(id,dir){ refreshSelects(); document.getElementById('tCat').value=id; document.getElementById('tDir').value=dir; openModal('txnModal'); }
+function setAuto(id,v){ const c=DB.categories.find(x=>x.id===id); if(!c)return;
+  // settle pending days at the OLD rate first, so history stays exact
+  if(c.autoEnabled) accrueOne(c, dayKey(Date.now()), Date.now());
+  c.autoDailyAmount=+v||0; c.updatedAt=Date.now(); save(); render(); }
+function toggleAuto(id){ const c=DB.categories.find(x=>x.id===id); if(!c)return;
+  c.autoEnabled=!c.autoEnabled; c.updatedAt=Date.now();
+  if(c.autoEnabled){ c.lastAutoDate=dayKey(Date.now()); c.lastAutoApplied=Date.now(); } // fresh start — no surprise backfill
+  save(); render(); }
+
+function refreshSelects(){
+  const opts=DB.categories.map(c=>`<option value="${c.id}">${esc(c.name)} (${fmt(c.balance)})</option>`).join('');
+  ['tCat','xFrom','xTo','rSource','rTarget','ledCat'].forEach(id=>{ const el=document.getElementById(id); if(!el)return; const v=el.value; el.innerHTML=(id==='ledCat'?'<option value="">All categories</option>':'')+opts; if(v)el.value=v; });
+}
+function renderLedger(){
+  refreshSelects();
+  const c=document.getElementById('ledCat').value, ty=document.getElementById('ledType').value;
+  const rows=[...DB.transactions].sort((a,b)=>b.ts-a.ts).filter(t=>(!c||t.categoryId===c)&&(!ty||t.type===ty));
+  document.getElementById('ledBody').innerHTML=rows.map(t=>`<tr><td class="p-3 text-xs faint">${new Date(t.ts).toLocaleString()}</td><td class="p-3">${esc(catName(t.categoryId))}</td><td class="p-3"><span class="text-[11px] px-2 py-1 rounded-full" style="border:1px solid var(--line)">${t.type}</span></td><td class="p-3 text-right font-semibold" style="color:${t.amount>=0?'#3E5A3E':'#9E4A2D'}">${fmt(t.amount)}</td><td class="p-3 text-xs faint">${esc(t.note||'')}</td><td class="p-3"><button onclick="delTxn('${t.id}')" class="text-xs underline faint">reverse</button></td></tr>`).join('')||'<tr><td colspan=6 class="p-4 faint">No entries.</td></tr>';
+}
+
+/* ---- charts ---- */
+function drawCharts(){
+  if(typeof Chart==='undefined')return;
+  const palette=['#C15F3C','#5B7A5A','#A07C2C','#7A6A53','#8C4A3C','#6B7F6E','#B98A2F','#4F5B66'];
+  const labels=DB.categories.map(c=>c.name), data=DB.categories.map(c=>+c.balance||0), colors=DB.categories.map((c,i)=>c.color&&c.color!== '#6366f1'?c.color:palette[i%palette.length]);
+  if(charts.bar)charts.bar.destroy(); if(charts.pie)charts.pie.destroy();
+  charts.bar=new Chart(document.getElementById('chBar'),{type:'bar',data:{labels,datasets:[{data,backgroundColor:colors,borderRadius:4,borderSkipped:false}]},options:{plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#8A857A'},grid:{display:false}},y:{ticks:{color:'#8A857A'},grid:{color:'#ECE4D4'}}}}});
+  const t=totals();
+  charts.pie=new Chart(document.getElementById('chPie'),{type:'doughnut',data:{labels:['Debit nature','Credit nature'],datasets:[{data:[t.debit,t.credit],backgroundColor:['#5B7A5A','#C15F3C'],borderColor:'#FDFCF9',borderWidth:3}]},options:{cutout:'62%',plugins:{legend:{labels:{color:'#23211E',boxWidth:12,padding:16}}}}});
+}
+
+/* ---- import/export ---- */
+function exportJSON(){ const b=new Blob([JSON.stringify(DB,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='dynaledger-backup.json'; a.click(); }
+function importJSON(e){ const f=e.target.files[0]; if(!f)return; const r=new FileReader(); r.onload=()=>{ try{DB=JSON.parse(r.result);save();render();alert('Imported!');}catch(_){alert('Bad file');} }; r.readAsText(f); }
+function exportCSV(){ const rows=[['date','category','type','amount','note'],...[...DB.transactions].sort((a,b)=>b.ts-a.ts).map(t=>[new Date(t.ts).toISOString(),catName(t.categoryId),t.type,t.amount,`"${(t.note||'').replace(/"/g,'""')}"`])]; const b=new Blob([rows.map(r=>r.join(',')).join('\n')],{type:'text/csv'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='dynaledger-ledger.csv'; a.click(); }
+function saveCurrency(){ DB.currency=document.getElementById('currencyInp').value||'₹'; save(); render(); }
+function wipeAll(){ if(!confirm('Delete ALL data?'))return; DB={categories:[],relations:[],transactions:[],currency:'₹'}; save(); render(); }
+function seedDemo(){
+  if(DB.categories.length&&!confirm('Add demo data on top?'))return;
+  const mk=(name,nature,bal,min,auto,color)=>{const id=uid();const now=Date.now();DB.categories.push({id,name,nature,balance:bal,openingBalance:bal,minBalance:min,color:color||'#C15F3C',autoDailyAmount:auto||0,autoEnabled:!!auto,note:'',createdAt:now,lastAutoApplied:now,lastAutoDate:dayKey(now),updatedAt:now});return id;};
+  const salary=mk('Salary (income)','credit',0,0,0,'#A07C2C'), save=mk('Savings','debit',5000,2000,50,'#5B7A5A'), rent=mk('Rent','debit',0,0,0,'#C15F3C'), food=mk('Food','debit',2000,500,-20,'#7A6A53'), loan=mk('Loan owed','credit',20000,0,0,'#4F5B66');
+  DB.relations.push({id:uid(),sourceId:salary,targetId:save,mode:'percent',value:20,deductFromSource:true,active:true,updatedAt:Date.now()});
+  DB.relations.push({id:uid(),sourceId:salary,targetId:rent,mode:'percent',value:30,deductFromSource:true,active:true,updatedAt:Date.now()});
+  DB.relations.push({id:uid(),sourceId:salary,targetId:food,mode:'percent',value:10,deductFromSource:false,active:true,updatedAt:Date.now()});
+  save(); render(); switchTab('dashboard');
+}
+
+/* ---- PWA: installable app + offline ---- */
+if('serviceWorker' in navigator && (location.protocol==='http:'||location.protocol==='https:')){
+  window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+}
+function netState(){
+  const on=navigator.onLine, d=document.getElementById('netDot'), t=document.getElementById('netTxt');
+  if(!d||!t) return;
+  d.className='netdot '+(on?'on':'off');
+  t.innerText=on?'online · sync available':'offline · app still works';
+}
+window.addEventListener('online',()=>{ netState(); runAutoUpdate(false); });
+window.addEventListener('offline',netState);
+
+/* ---- sync via 4-digit code (needs INTERNET on both devices, same time) ----
+   Direct device-to-device channel over the free PeerJS cloud. Nothing is
+   stored on any server: the sharing device sends its data straight to the
+   joining device. Merge rule: newest change wins per category/rule (updatedAt),
+   transactions are united by id, and an automatic backup is kept first. */
+const SYNC_PREFIX='dynaledger-v1-';
+let syncPeer=null, syncConns=new Set(), syncTimer=null;
+function needPeer(){
+  if(typeof Peer==='undefined'){ alert('Sync needs internet: the connection library could not load. Check your connection and reload this page online, then try again.'); return false; }
+  if(!navigator.onLine){ alert('You appear to be offline. Sync requires internet on both devices — everything else in the app works offline.'); return false; }
+  return true;
+}
+function hostSync(){
+  if(!needPeer()) return;
+  stopSync(true);
+  const code=String(Math.floor(1000+Math.random()*9000));
+  const peer=new Peer(SYNC_PREFIX+code,{debug:0});
+  syncPeer=peer;
+  peer.on('open',()=>{
+    document.getElementById('hostBox').classList.remove('hidden');
+    document.getElementById('hostCode').innerText=code.split('').join(' ');
+    document.getElementById('hostStatus').innerText='Waiting for the other device… (enter this code there)';
+    document.getElementById('hostBtn').innerText='Regenerate code';
+    syncTimer=setTimeout(()=>{ stopSync(); alert('Sharing expired after 5 minutes for safety. Tap again for a fresh code.'); },5*60*1000);
+  });
+  peer.on('connection',(conn)=>{
+    syncConns.add(conn);
+    document.getElementById('hostStatus').innerText='Device connected — sending your data…';
+    conn.on('open',()=>conn.send({kind:'dynaledger-state',db:DB,at:Date.now()}));
+    conn.on('data',(msg)=>{
+      if(msg&&msg.kind==='dynaledger-ack'){
+        document.getElementById('hostStatus').innerText=`Synced ✓ ${msg.merged||''} — you can close this.`;
+        setTimeout(stopSync,4000);
+      }
+    });
+  });
+  peer.on('error',(e)=>{
+    if(e&&e.type==='unavailable-id'){ hostSync(); } // code taken — roll a fresh one
+    else document.getElementById('hostStatus').innerText='Connection issue — check internet and retry.';
+  });
+}
+function joinSync(){
+  if(!needPeer()) return;
+  const code=(document.getElementById('joinCode').value||'').replace(/\D/g,'');
+  if(code.length!==4){ alert('Enter the 4-digit code shown on your other device.'); return; }
+  const js=document.getElementById('joinStatus'); js.innerText='Connecting… keep both devices on this page.';
+  stopSync(true);
+  const peer=new Peer({debug:0}); syncPeer=peer;
+  peer.on('open',()=>{
+    const conn=peer.connect(SYNC_PREFIX+code,{reliable:true});
+    syncConns.add(conn);
+    conn.on('open',()=>{ js.innerText='Connected — receiving data…'; });
+    conn.on('data',(msg)=>{
+      if(msg&&msg.kind==='dynaledger-state'&&msg.db){
+        const summary=mergeIncoming(msg.db);
+        conn.send({kind:'dynaledger-ack',merged:summary});
+        js.innerText=`Synced ✓ ${summary} Your previous data was backed up automatically.`;
+        render();
+      }
+    });
+    conn.on('error',()=>{ js.innerText='Could not reach that code. Check the digits, internet, and that sharing is still open.'; });
+  });
+  peer.on('error',()=>{ js.innerText='Connection failed — is the sharing device still showing its code? Both need internet.'; });
+  syncTimer=setTimeout(stopSync,5*60*1000);
+}
+function mergeIncoming(remote){
+  try{ localStorage.setItem(LS+'.backup-'+Date.now(),JSON.stringify(DB)); }catch(e){}
+  let cats=0, rels=0, txns=0;
+  const cmap=new Map(DB.categories.map(c=>[c.id,c]));
+  (remote.categories||[]).forEach(rc=>{
+    const local=cmap.get(rc.id);
+    if(!local){ DB.categories.push(rc); cats++; }
+    else if((rc.updatedAt||0)>=(local.updatedAt||0)){ Object.assign(local,rc); cats++; }
+  });
+  const rmap=new Map(DB.relations.map(r=>[r.id,r]));
+  (remote.relations||[]).forEach(rr=>{
+    const local=rmap.get(rr.id);
+    if(!local){ DB.relations.push(rr); rels++; }
+    else if((rr.updatedAt||0)>=(local.updatedAt||0)){ Object.assign(local,rr); rels++; }
+  });
+  const tids=new Set(DB.transactions.map(t=>t.id));
+  (remote.transactions||[]).forEach(rt=>{ if(!tids.has(rt.id)){ DB.transactions.push(rt); tids.add(rt.id); txns++; } });
+  if(remote.currency && !DB.currency) DB.currency=remote.currency;
+  migrateAutoDates(); runAutoUpdate(false); save(); render();
+  return `${cats} categories, ${rels} rules, ${txns} entries merged`;
+}
+function stopSync(silent){
+  try{ syncConns.forEach(c=>c.close&&c.close()); }catch(e){}
+  syncConns=new Set();
+  try{ syncPeer&&syncPeer.destroy&&syncPeer.destroy(); }catch(e){}
+  syncPeer=null;
+  if(syncTimer){ clearTimeout(syncTimer); syncTimer=null; }
+  if(!silent){
+    const hb=document.getElementById('hostBox'); if(hb)hb.classList.add('hidden');
+    const btn=document.getElementById('hostBtn'); if(btn)btn.innerText='Show my 4-digit code';
+  }
+}
+
+/* init */
+load(); migrateAutoDates();
+document.getElementById('currencyInp').value=DB.currency||'₹';
+netState();
+runAutoUpdate(false); render();
+setInterval(()=>runAutoUpdate(false),60000);
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden){ netState(); runAutoUpdate(false); } });
+window.addEventListener('focus',()=>{ netState(); runAutoUpdate(false); });
+</script>
+</body>
+</html>
